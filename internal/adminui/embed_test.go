@@ -271,9 +271,9 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=10`,
-		`app.css?v=10`,
-		`theme-init.js?v=10`,
+		`app.js?v=11`,
+		`app.css?v=11`,
+		`theme-init.js?v=11`,
 		`id="cred-batch-bar"`,
 		`id="cred-select-all"`,
 		`id="overview-activity"`,
@@ -327,6 +327,9 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		"gb_theme",
 		"gb_density",
 		"function setSidebarOpen(open)",
+		"function sectionHead(title, hint)",
+		"overview-grid",
+		"drawer-hero",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)

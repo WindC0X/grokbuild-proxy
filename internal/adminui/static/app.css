@@ -1178,27 +1178,199 @@ table,
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 600;
-  line-height: 32px;
-  letter-spacing: -0.96px;
+  line-height: 34px;
+  letter-spacing: -1px;
   font-variant-numeric: tabular-nums;
+}
+
+.stat-sub {
+  margin-top: 4px;
 }
 
 .stat-card.tone-ok {
   border-color: var(--ok-border);
+  background: linear-gradient(180deg, var(--ok-bg) 0%, var(--bg-elev) 48%);
 }
 
 .stat-card.tone-warn {
   border-color: var(--warn-border);
+  background: linear-gradient(180deg, var(--warn-bg) 0%, var(--bg-elev) 48%);
 }
 
 .stat-card.tone-danger {
   border-color: var(--danger-border);
+  background: linear-gradient(180deg, var(--danger-bg) 0%, var(--bg-elev) 48%);
 }
 
 .stat-card.tone-off {
   border-color: var(--border-strong);
+}
+
+.stat-card-skeleton {
+  min-height: 96px;
+}
+
+.skeleton.sk-label {
+  width: 40%;
+  height: 10px;
+  margin-bottom: 12px;
+}
+
+.skeleton.sk-value {
+  width: 55%;
+  height: 22px;
+}
+
+.skeleton.sk-wide {
+  width: 70%;
+  height: 12px;
+}
+
+.skeleton.sk-mid {
+  width: 50%;
+  height: 12px;
+}
+
+.skeleton.sk-narrow {
+  width: 35%;
+  height: 12px;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.panel-card {
+  padding: 16px;
+  min-height: 100%;
+}
+
+.section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.32px;
+  line-height: 22px;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.action-grid .btn {
+  justify-content: center;
+}
+
+.empty-inline {
+  padding: 8px 0 4px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drawer-stack {
+  gap: 14px;
+}
+
+.drawer-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-hero-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  line-height: 24px;
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+.drawer-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pager-page {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  min-width: 6.5em;
+  text-align: center;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.toast-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--bg-soft);
+  color: var(--text-secondary);
+}
+
+.toast.ok .toast-mark {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.toast.err .toast-mark {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .checklist {
@@ -1213,10 +1385,36 @@ table,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  list-style: none;
+}
+
+.checklist {
+  padding-left: 0;
 }
 
 .check-done {
   color: var(--ok);
+  border-color: var(--ok-border);
+}
+
+.check-todo .check-mark {
+  color: var(--muted);
+}
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.check-mark {
+  font-weight: 700;
+  width: 1.1em;
+  text-align: center;
 }
 
 .kv {
@@ -1507,6 +1705,10 @@ h4 {
   .toolbar-meta {
     grid-column: 1 / -1;
   }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 880px) {
@@ -1543,6 +1745,15 @@ h4 {
 @media (max-width: 720px) {
   .main {
     padding: 16px 14px 40px;
+  }
+
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-value {
+    font-size: 24px;
+    line-height: 30px;
   }
 
   .toolbar {
