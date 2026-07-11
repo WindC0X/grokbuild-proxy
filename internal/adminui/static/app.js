@@ -1226,12 +1226,19 @@
     runTd.appendChild(runBadge);
     tr.appendChild(runTd);
 
-    tr.appendChild(el("td", "mono", String(c.priority != null ? c.priority : 0)));
-    tr.appendChild(el("td", "small", fmtTime(c.expires_at)));
-    var quotaTd = el("td", "quota-cell small muted");
-    setText(quotaTd, quotaCellText(c.id));
+    var prioTd = el("td", "mono col-prio");
+    prioTd.textContent = String(c.priority != null ? c.priority : 0);
+    tr.appendChild(prioTd);
+    var expTd = el("td", "small col-expires");
+    expTd.textContent = fmtTime(c.expires_at);
+    tr.appendChild(expTd);
+    var quotaTd = el("td", "quota-cell");
+    paintQuotaCell(quotaTd, c.id);
     tr.appendChild(quotaTd);
-    tr.appendChild(el("td", "small err-cell", c.last_error || "—"));
+    var errTd = el("td", "small err-cell");
+    errTd.textContent = c.last_error || "—";
+    if (c.last_error) errTd.title = String(c.last_error);
+    tr.appendChild(errTd);
 
     var act = el("td", "col-actions");
     var detail = el("button", "btn btn-sm btn-primary", "详情");
@@ -1631,6 +1638,32 @@
     return num(build.shared_weekly_usage_percent).toFixed(1) + "%";
   }
 
+  function paintQuotaCell(cell, credId) {
+    if (!cell) return;
+    clear(cell);
+    cell.className = "quota-cell";
+    var cached = state.billingCache[credId];
+    if (!cached || !cached.snap) {
+      cell.appendChild(el("span", "muted small", "—"));
+      return;
+    }
+    var build = (cached.snap && cached.snap.grok_build) || {};
+    if (!build.reported || build.shared_weekly_usage_percent == null) {
+      cell.appendChild(el("span", "muted small", "未报告"));
+      return;
+    }
+    var pct = num(build.shared_weekly_usage_percent);
+    var tone = toneFromPct(pct);
+    var mini = el("div", "quota-mini");
+    var track = el("div", "quota-track");
+    var fill = el("div", "quota-fill tone-" + tone);
+    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    track.appendChild(fill);
+    mini.appendChild(track);
+    mini.appendChild(el("span", "quota-pct mono small", pct.toFixed(1) + "%"));
+    cell.appendChild(mini);
+  }
+
   // Load quota only for rows currently on the page — never full-pool auto N+1.
   function loadVisiblePageQuota() {
     var rows = document.querySelectorAll("#cred-tbody tr.cred-row");
@@ -1659,18 +1692,19 @@
       var cell = quotaCellFor(credId);
       if (cell) {
         clear(cell);
-        cell.appendChild(el("span", "muted", "…"));
+        cell.className = "quota-cell";
+        cell.appendChild(el("span", "muted small", "…"));
       }
       enqueueBilling(credId, function (err) {
         var target = quotaCellFor(credId);
         if (!target) return;
-        clear(target);
         if (err) {
-          target.appendChild(el("span", "error", "失败"));
+          clear(target);
+          target.className = "quota-cell";
+          target.appendChild(el("span", "error small", "失败"));
           return;
         }
-        setText(target, quotaCellText(credId));
-        target.className = "quota-cell small";
+        paintQuotaCell(target, credId);
       });
     });
     recordActivity({
@@ -2082,10 +2116,10 @@
   }
 
   function renderClientTable(clients) {
-    var table = el("table", "data-table");
+    var table = el("table", "data-table client-table");
     var thead = el("thead");
     var hr = el("tr");
-    ["名称", "编号", "前缀", "创建时间", "状态", ""].forEach(function (h) {
+    ["名称", "编号", "前缀", "创建时间", "状态", "操作"].forEach(function (h) {
       hr.appendChild(el("th", "", h));
     });
     thead.appendChild(hr);
@@ -2093,15 +2127,17 @@
 
     var tbody = el("tbody");
     clients.forEach(function (c) {
-      var tr = el("tr");
-      tr.appendChild(el("td", "", c.name || "—"));
+      var tr = el("tr", "client-row");
+      var nameTd = el("td");
+      nameTd.appendChild(el("div", "cred-name", c.name || "（未命名）"));
+      tr.appendChild(nameTd);
       var idTd = el("td");
-      idTd.appendChild(el("code", "", shortId(c.id)));
+      idTd.appendChild(el("code", "mono small", shortId(c.id)));
       tr.appendChild(idTd);
       var prefTd = el("td");
-      prefTd.appendChild(el("code", "", c.prefix || "—"));
+      prefTd.appendChild(el("code", "mono small", c.prefix || "—"));
       tr.appendChild(prefTd);
-      tr.appendChild(el("td", "", fmtTime(c.created_at)));
+      tr.appendChild(el("td", "small", fmtTime(c.created_at)));
       var st = el("td");
       st.appendChild(
         el("span", "badge " + (c.disabled ? "badge-off" : "badge-ok"), c.disabled ? "已停用" : "可用")
@@ -2298,18 +2334,24 @@
   }
 
   function renderSettings(settings) {
-    var wrap = el("div", "stack");
+    var wrap = el("div", "stack settings-layout");
     var globalProxy = settings.global_proxy || {};
     var converter = settings.sso_converter || {};
     var inspection = settings.inspection || {};
-    state.settingsSaveHint = el("p", "muted small", "");
-    wrap.appendChild(state.settingsSaveHint);
+
+    var saveBar = el("div", "settings-save-bar card");
+    state.settingsSaveHint = el("p", "muted small settings-save-hint", "");
+    saveBar.appendChild(state.settingsSaveHint);
+    var save = el("button", "btn btn-primary", "保存运行设置");
+    save.type = "button";
+    saveBar.appendChild(save);
+    wrap.appendChild(saveBar);
 
     var tabs = el("div", "settings-tabs");
     tabs.setAttribute("role", "tablist");
-    var paneProxy = el("div", "settings-pane");
-    var paneSSO = el("div", "settings-pane hidden");
-    var paneInspect = el("div", "settings-pane hidden");
+    var paneProxy = el("div", "settings-pane card panel-card");
+    var paneSSO = el("div", "settings-pane card panel-card hidden");
+    var paneInspect = el("div", "settings-pane card panel-card hidden");
     var panes = { proxy: paneProxy, sso: paneSSO, inspection: paneInspect };
     var tabButtons = {};
 
@@ -2340,7 +2382,7 @@
     });
     wrap.appendChild(tabs);
 
-    paneProxy.appendChild(el("h3", "", "全局出站代理"));
+    paneProxy.appendChild(sectionHead("全局出站代理", "影响 OAuth 刷新、上游请求与巡检出站"));
     var proxyMode = settingSelect(
       "代理模式",
       [
@@ -2352,7 +2394,7 @@
     );
     proxyMode.input.addEventListener("change", markSettingsDirty);
     paneProxy.appendChild(proxyMode.field);
-    if (globalProxy.url) paneProxy.appendChild(el("p", "muted", "当前：" + globalProxy.url));
+    if (globalProxy.url) paneProxy.appendChild(el("p", "muted small", "当前：" + globalProxy.url));
     var proxyURL = settingInput(
       "新代理 URL",
       "password",
@@ -2361,7 +2403,7 @@
     proxyURL.input.addEventListener("input", markSettingsDirty);
     paneProxy.appendChild(proxyURL.field);
 
-    paneSSO.appendChild(el("h3", "", "SSO 转换服务"));
+    paneSSO.appendChild(sectionHead("SSO 转换服务", "可选的内部 Bearer 鉴权转换 sidecar"));
     var converterEnabled = settingCheckbox("启用 SSO 文件转换", !!converter.enabled);
     var converterEndpoint = settingInput("服务端点", "url", "https://converter.example");
     converterEndpoint.input.value = converter.endpoint || "";
@@ -2389,10 +2431,14 @@
       item.input.addEventListener(ev, markSettingsDirty);
     });
     paneSSO.appendChild(
-      el("p", "muted", converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key")
+      el(
+        "p",
+        "muted small",
+        converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key"
+      )
     );
 
-    paneInspect.appendChild(el("h3", "", "凭证自动巡检"));
+    paneInspect.appendChild(sectionHead("凭证自动巡检", "定时健康检查与 401/429 处理策略"));
     var inspectEnabled = settingCheckbox("启用定时巡检", !!inspection.enabled);
     var inspectInterval = settingInput("巡检间隔（秒）", "number");
     inspectInterval.input.value = inspection.interval_sec || 3600;
@@ -2417,9 +2463,13 @@
       item.input.addEventListener(ev, markSettingsDirty);
     });
     paneInspect.appendChild(
-      el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。")
+      el(
+        "p",
+        "muted small",
+        "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。"
+      )
     );
-    var inspectionStatus = el("p", "muted", "巡检状态加载中…");
+    var inspectionStatus = el("p", "status-chip muted", "巡检状态加载中…");
     paneInspect.appendChild(inspectionStatus);
 
     wrap.appendChild(paneProxy);
@@ -2452,8 +2502,6 @@
     });
     paneInspect.appendChild(runInspection);
 
-    var save = el("button", "btn btn-primary", "保存运行设置");
-    save.type = "button";
     save.addEventListener("click", function () {
       if (num(inspectPurge.input.value) > 0) {
         if (!confirm("已设置隔离后自动删除。确认保存该高风险配置？")) return;
@@ -2516,7 +2564,6 @@
           save.disabled = false;
         });
     });
-    wrap.appendChild(save);
     return wrap;
   }
 
@@ -2617,44 +2664,84 @@
   }
 
   function renderSystem(sys) {
-    var wrap = el("div", "stack");
-    var dl = el("dl", "kv");
-    addKV(dl, "版本", sys.version);
-    addKV(dl, "监听地址", sys.listen);
-    addKV(dl, "数据目录", sys.data_dir);
-    addKV(dl, "对话后端", sys.chat_backend);
+    var wrap = el("div", "stack system-layout");
+    var grid = el("div", "overview-grid");
+
+    function cardSection(title, hint, rows) {
+      var card = el("div", "card panel-card stack");
+      card.appendChild(sectionHead(title, hint));
+      var dl = el("dl", "kv");
+      (rows || []).forEach(function (row) {
+        addKV(dl, row[0], row[1]);
+      });
+      card.appendChild(dl);
+      return card;
+    }
+
+    grid.appendChild(
+      cardSection("运行时", "进程与入口", [
+        ["版本", sys.version],
+        ["监听地址", sys.listen],
+        ["数据目录", sys.data_dir],
+        ["对话后端", sys.chat_backend],
+        [
+          "Anthropic 入口",
+          sys.anthropic ? (sys.anthropic.enabled ? "已启用" : "已关闭") : "—",
+        ],
+      ])
+    );
+
     if (sys.upstream) {
-      addKV(dl, "上游地址", sys.upstream.base_url);
-      addKV(dl, "客户端版本", sys.upstream.client_version);
-      addKV(dl, "客户端标识", sys.upstream.client_identifier);
-      addKV(dl, "User-Agent", sys.upstream.user_agent);
-      addKV(dl, "Token 鉴权头", String(!!sys.upstream.token_auth));
+      grid.appendChild(
+        cardSection("上游", "Grok Build 代理目标", [
+          ["上游地址", sys.upstream.base_url],
+          ["客户端版本", sys.upstream.client_version],
+          ["客户端标识", sys.upstream.client_identifier],
+          ["User-Agent", sys.upstream.user_agent],
+          ["Token 鉴权头", String(!!sys.upstream.token_auth)],
+        ])
+      );
     }
-    if (sys.anthropic) {
-      addKV(dl, "Anthropic 入口", sys.anthropic.enabled ? "已启用" : "已关闭");
-    }
+
     if (sys.pool) {
       var pool = sys.pool;
-      addKV(dl, "账号池可用", String(pool.available || 0) + " / " + String(pool.total || 0));
-      addKV(dl, "冷却中", pool.cooling || 0);
-      addKV(dl, "已禁用", pool.disabled || 0);
-      addKV(dl, "令牌已过期", pool.expired || 0);
-      addKV(dl, "下次恢复", pool.next_recovery_at ? fmtTime(pool.next_recovery_at) : "—");
-      addKV(dl, "最近成功", pool.last_success_at ? fmtTime(pool.last_success_at) : "—");
+      grid.appendChild(
+        cardSection("账号池", "与概览同一摘要源", [
+          ["可用", String(pool.available || 0) + " / " + String(pool.total || 0)],
+          ["冷却中", pool.cooling || 0],
+          ["已禁用", pool.disabled || 0],
+          ["令牌已过期", pool.expired || 0],
+          ["下次恢复", pool.next_recovery_at ? fmtTime(pool.next_recovery_at) : "—"],
+          ["最近成功", pool.last_success_at ? fmtTime(pool.last_success_at) : "—"],
+        ])
+      );
     }
+
     if (sys.limits) {
       var lim = sys.limits;
-      addKV(dl, "最大请求体", String(lim.MaxBodyBytes != null ? lim.MaxBodyBytes : lim.max_body_bytes || "—"));
-      addKV(
-        dl,
-        "请求超时(秒)",
-        String(lim.RequestTimeoutSec != null ? lim.RequestTimeoutSec : lim.request_timeout_sec || "—")
+      grid.appendChild(
+        cardSection("限制", "请求体 / 超时 / 并发", [
+          [
+            "最大请求体",
+            String(lim.MaxBodyBytes != null ? lim.MaxBodyBytes : lim.max_body_bytes || "—"),
+          ],
+          [
+            "请求超时(秒)",
+            String(
+              lim.RequestTimeoutSec != null ? lim.RequestTimeoutSec : lim.request_timeout_sec || "—"
+            ),
+          ],
+          [
+            "最大并发",
+            String(lim.MaxConcurrent != null ? lim.MaxConcurrent : lim.max_concurrent || "—"),
+          ],
+        ])
       );
-      addKV(dl, "最大并发", String(lim.MaxConcurrent != null ? lim.MaxConcurrent : lim.max_concurrent || "—"));
     }
-    wrap.appendChild(dl);
 
-    var raw = el("details");
+    wrap.appendChild(grid);
+
+    var raw = el("details", "card panel-card system-raw");
     raw.appendChild(el("summary", "", "调试：原始 JSON"));
     var pre = el("pre", "code");
     pre.textContent = JSON.stringify(sys, null, 2);

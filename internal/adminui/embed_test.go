@@ -271,9 +271,9 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=11`,
-		`app.css?v=11`,
-		`theme-init.js?v=11`,
+		`app.js?v=12`,
+		`app.css?v=12`,
+		`theme-init.js?v=12`,
 		`id="cred-batch-bar"`,
 		`id="cred-select-all"`,
 		`id="overview-activity"`,
@@ -330,6 +330,9 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		"function sectionHead(title, hint)",
 		"overview-grid",
 		"drawer-hero",
+		"function paintQuotaCell(cell, credId)",
+		"settings-save-bar",
+		"system-layout",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)

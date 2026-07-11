@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>grokbuild 管理后台</title>
-  <link rel="stylesheet" href="/admin/ui/app.css?v=11" />
-  <script src="/admin/ui/theme-init.js?v=11"></script>
+  <link rel="stylesheet" href="/admin/ui/app.css?v=12" />
+  <script src="/admin/ui/theme-init.js?v=12"></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -290,6 +290,9 @@
                 <button type="button" class="btn btn-primary" id="btn-client-retry">重试</button>
               </div>
               <div id="client-empty" class="empty card hidden">
+                <div class="empty-icon" aria-hidden="true">
+                  <svg class="icon icon-lg"><use href="#i-users"></use></svg>
+                </div>
                 <h3>暂无客户端密钥</h3>
                 <p class="muted">创建后会得到一次性明文密钥，用于 OpenAI 兼容客户端或 Claude Code。</p>
                 <button type="button" class="btn btn-primary" id="btn-empty-client-create">创建密钥</button>
@@ -370,6 +373,6 @@
     </div>
   </div>
 
-  <script src="/admin/ui/app.js?v=11" defer></script>
+  <script src="/admin/ui/app.js?v=12" defer></script>
 </body>
 </html>
