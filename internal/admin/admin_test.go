@@ -131,6 +131,22 @@ func TestSetClientDisabled(t *testing.T) {
 		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Malformed JSON → 400
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{`))
+	h.SetClientDisabled(rec, req, "cli_1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status=%d want 400", rec.Code)
+	}
+
+	// Unknown id → 404
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/missing/disable", strings.NewReader(`{"disabled":true}`))
+	h.SetClientDisabled(rec, req, "missing")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404 body=%s", rec.Code, rec.Body.String())
+	}
+
 	// Disable
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":true}`))
@@ -142,8 +158,12 @@ func TestSetClientDisabled(t *testing.T) {
 	if len(list) != 1 || !list[0].Disabled {
 		t.Fatalf("expected disabled client, got %+v", list)
 	}
+	// Response body should echo disabled state.
+	if !strings.Contains(rec.Body.String(), `"disabled":true`) && !strings.Contains(rec.Body.String(), `"disabled": true`) {
+		t.Fatalf("response missing disabled=true: %s", rec.Body.String())
+	}
 
-	// Re-enable via router path
+	// Re-enable via router path with admin auth
 	mux := http.NewServeMux()
 	h.Register(mux)
 	rec = httptest.NewRecorder()
@@ -156,6 +176,69 @@ func TestSetClientDisabled(t *testing.T) {
 	list, _ = store.ListClients()
 	if len(list) != 1 || list[0].Disabled {
 		t.Fatalf("expected enabled client, got %+v", list)
+	}
+
+	// Unauthenticated router call is rejected
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":true}`))
+	h.RequireAdmin(mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status=%d want 401", rec.Code)
+	}
+}
+
+func TestBatchDisableCredentialsLikeAdminUI(t *testing.T) {
+	// Mirrors Admin UI batch enable/disable: sequential POST .../disable per id.
+	store := newFakeStore()
+	now := time.Now().UTC()
+	for _, id := range []string{"cred_a", "cred_b", "cred_c"} {
+		store.creds[id] = storage.Credential{
+			ID: id, Name: id, Enabled: true, Priority: 1,
+			AccessToken: "a", RefreshToken: "r", CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	// One already missing to simulate partial failure.
+	h := &Handlers{Store: store, AdminKey: "admin"}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	root := h.RequireAdmin(mux)
+
+	ids := []string{"cred_a", "cred_b", "missing", "cred_c"}
+	ok, fail := 0, 0
+	for _, id := range ids {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/credentials/"+id+"/disable", strings.NewReader(`{"enabled":false}`))
+		req.Header.Set("Authorization", "Bearer admin")
+		root.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK {
+			ok++
+		} else {
+			fail++
+		}
+	}
+	if ok != 3 || fail != 1 {
+		t.Fatalf("ok=%d fail=%d want 3/1", ok, fail)
+	}
+	for _, id := range []string{"cred_a", "cred_b", "cred_c"} {
+		c, err := store.GetCredential(id)
+		if err != nil || c.Enabled {
+			t.Fatalf("id=%s enabled=%v err=%v", id, c.Enabled, err)
+		}
+	}
+
+	// Batch re-enable success path
+	for _, id := range []string{"cred_a", "cred_b", "cred_c"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/credentials/"+id+"/disable", strings.NewReader(`{"enabled":true}`))
+		req.Header.Set("Authorization", "Bearer admin")
+		root.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("re-enable %s status=%d body=%s", id, rec.Code, rec.Body.String())
+		}
+		c, _ := store.GetCredential(id)
+		if !c.Enabled {
+			t.Fatalf("%s still disabled", id)
+		}
 	}
 }
 

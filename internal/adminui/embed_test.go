@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -75,11 +76,33 @@ func TestNoAutomaticBillingFanOutOnListRender(t *testing.T) {
 		t.Fatal("could not bound renderCredentialRow")
 	}
 	rowBody := source[rowStart : rowStart+rowEnd]
-	if strings.Contains(rowBody, "fillCredentialUsage") {
-		t.Fatal("credential list row must not auto-fetch billing (N+1)")
+	for _, banned := range []string{
+		"fillCredentialUsage",
+		"/billing",
+		"enqueueBilling",
+		"GetBilling",
+	} {
+		if strings.Contains(rowBody, banned) {
+			t.Fatalf("credential list row must not contain %q (N+1 risk)", banned)
+		}
 	}
-	if strings.Contains(rowBody, "/billing") {
-		t.Fatal("credential list row must not request /billing")
+
+	// loadCredentials list path must not fan out billing either.
+	loadStart := strings.Index(source, "function loadCredentials()")
+	if loadStart < 0 {
+		t.Fatal("missing loadCredentials")
+	}
+	loadEnd := strings.Index(source[loadStart:], "function applyCredFiltersAndRender")
+	if loadEnd < 0 {
+		t.Fatal("could not bound loadCredentials")
+	}
+	loadBody := source[loadStart : loadStart+loadEnd]
+	if strings.Contains(loadBody, "/billing") || strings.Contains(loadBody, "fillCredentialUsage") {
+		t.Fatal("loadCredentials must not request billing for each credential")
+	}
+	// List fetch is a single collection endpoint.
+	if !strings.Contains(loadBody, `"/admin/credentials"`) {
+		t.Fatal("loadCredentials should fetch credential collection once")
 	}
 
 	// On-demand helper remains available for detail view.
@@ -91,6 +114,82 @@ func TestNoAutomaticBillingFanOutOnListRender(t *testing.T) {
 	}
 	if !strings.Contains(source, "enqueueBilling") {
 		t.Fatal("expected queued billing loader")
+	}
+	// Concurrency must stay small (not unbounded fan-out).
+	if !strings.Contains(source, "BILLING_CONCURRENCY = 3") {
+		t.Fatal("expected BILLING_CONCURRENCY = 3")
+	}
+}
+
+func TestBatchOpsUseExistingDisableRefreshEndpoints(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	// Batch bar wiring must call the same single-item APIs the UI already uses.
+	for _, marker := range []string{
+		`btn-batch-enable`,
+		`btn-batch-disable`,
+		`btn-batch-refresh`,
+		`"/disable", {\n            enabled: true`,
+		`"/disable", {\n            enabled: false`,
+		`"/refresh"`,
+		"function runBatch(actionLabel, worker)",
+		"selectedIdList()",
+	} {
+		if !strings.Contains(source, marker) {
+			// Allow compact single-line variants for disable payloads.
+			altOK := false
+			if strings.Contains(marker, "enabled: true") &&
+				(strings.Contains(source, "enabled: true") && strings.Contains(source, "btn-batch-enable")) {
+				altOK = true
+			}
+			if strings.Contains(marker, "enabled: false") &&
+				(strings.Contains(source, "enabled: false") && strings.Contains(source, "btn-batch-disable")) {
+				altOK = true
+			}
+			if strings.Contains(marker, `"/refresh"`) && strings.Contains(source, "/refresh") &&
+				strings.Contains(source, "btn-batch-refresh") {
+				altOK = true
+			}
+			if !altOK {
+				t.Fatalf("app.js missing batch marker %q", marker)
+			}
+		}
+	}
+}
+
+func TestAppJSParsesAsScript(t *testing.T) {
+	// Syntax gate for the zero-build SPA (catches unbalanced braces etc.).
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// node --check when available; otherwise do a cheap brace balance check.
+	if path, lookErr := exec.LookPath("node"); lookErr == nil {
+		cmd := exec.Command(path, "--check")
+		cmd.Stdin = strings.NewReader(string(app))
+		out, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("node --check app.js failed: %v\n%s", runErr, out)
+		}
+		return
+	}
+	balance := 0
+	for _, r := range string(app) {
+		switch r {
+		case '{':
+			balance++
+		case '}':
+			balance--
+			if balance < 0 {
+				t.Fatal("app.js has unmatched closing brace")
+			}
+		}
+	}
+	if balance != 0 {
+		t.Fatalf("app.js brace balance=%d", balance)
 	}
 }
 
