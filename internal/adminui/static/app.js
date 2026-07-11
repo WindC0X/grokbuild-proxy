@@ -1506,22 +1506,28 @@
     drainBillingQueue();
   }
 
+  // Per-job function parameter (not loop `var`) so concurrent .then/.catch keep the
+  // correct credential id when BILLING_CONCURRENCY > 1 (page-quota loads).
+  function startBillingJob(job) {
+    if (!job || !job.id) return;
+    state.billingActive++;
+    api("GET", "/admin/credentials/" + encodeURIComponent(job.id) + "/billing")
+      .then(function (snap) {
+        state.billingCache[job.id] = { at: Date.now(), snap: snap };
+        if (job.cb) job.cb(null, snap);
+      })
+      .catch(function (err) {
+        if (job.cb) job.cb(err);
+      })
+      .finally(function () {
+        state.billingActive--;
+        drainBillingQueue();
+      });
+  }
+
   function drainBillingQueue() {
     while (state.billingActive < BILLING_CONCURRENCY && state.billingQueue.length) {
-      var job = state.billingQueue.shift();
-      state.billingActive++;
-      api("GET", "/admin/credentials/" + encodeURIComponent(job.id) + "/billing")
-        .then(function (snap) {
-          state.billingCache[job.id] = { at: Date.now(), snap: snap };
-          job.cb(null, snap);
-        })
-        .catch(function (err) {
-          job.cb(err);
-        })
-        .finally(function () {
-          state.billingActive--;
-          drainBillingQueue();
-        });
+      startBillingJob(state.billingQueue.shift());
     }
   }
 

@@ -305,6 +305,59 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 	}
 }
 
+func TestBillingQueueConcurrencyKeepsPerJobBinding(t *testing.T) {
+	// Guards the classic while+var async closure bug: concurrent page-quota
+	// loads must not all close over the last shifted job.
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	if !strings.Contains(source, "function startBillingJob(job)") {
+		t.Fatal("expected startBillingJob(job) so each concurrent request binds its own job")
+	}
+	if !strings.Contains(source, "function drainBillingQueue()") {
+		t.Fatal("missing drainBillingQueue")
+	}
+	start := strings.Index(source, "function drainBillingQueue()")
+	end := strings.Index(source[start:], "\n  function ")
+	if end < 0 {
+		end = len(source) - start
+	}
+	drainBody := source[start : start+end]
+	// Drain must dispatch via startBillingJob(...shift...), not inline var job + api().then
+	if !strings.Contains(drainBody, "startBillingJob(state.billingQueue.shift())") &&
+		!strings.Contains(drainBody, "startBillingJob(state.billingQueue.shift())") {
+		// allow whitespace variants
+		if !strings.Contains(drainBody, "startBillingJob(") || !strings.Contains(drainBody, "billingQueue.shift()") {
+			t.Fatalf("drainBillingQueue must call startBillingJob with shifted job, got:\n%s", drainBody)
+		}
+	}
+	// Forbidden pattern: var job = ...shift in the same function that attaches .then using job
+	if strings.Contains(drainBody, "var job = state.billingQueue.shift()") {
+		t.Fatal("drainBillingQueue must not use loop-scoped var job with async callbacks")
+	}
+	// startBillingJob body must use job.id in URL and cache key (shipped path)
+	jobStart := strings.Index(source, "function startBillingJob(job)")
+	if jobStart < 0 {
+		t.Fatal("missing startBillingJob")
+	}
+	jobEnd := strings.Index(source[jobStart:], "function drainBillingQueue")
+	if jobEnd < 0 {
+		t.Fatal("could not bound startBillingJob")
+	}
+	jobBody := source[jobStart : jobStart+jobEnd]
+	for _, marker := range []string{
+		"encodeURIComponent(job.id)",
+		"state.billingCache[job.id]",
+		"job.cb",
+	} {
+		if !strings.Contains(jobBody, marker) {
+			t.Fatalf("startBillingJob missing %q", marker)
+		}
+	}
+}
+
 func TestPageQuotaIsBoundedAndNotAutoOnList(t *testing.T) {
 	app, err := ReadStatic("app.js")
 	if err != nil {
