@@ -38,7 +38,7 @@ func TestBillingDiagnosticsPreserveMissingValues(t *testing.T) {
 	}
 }
 
-func TestCredentialCardsExposeInspectionResult(t *testing.T) {
+func TestCredentialDetailExposesInspectionResult(t *testing.T) {
 	app, err := ReadStatic("app.js")
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +54,166 @@ func TestCredentialCardsExposeInspectionResult(t *testing.T) {
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing credential inspection marker %q", marker)
+		}
+	}
+}
+
+func TestNoAutomaticBillingFanOutOnListRender(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+
+	// List rendering must not call fillCredentialUsage.
+	if !strings.Contains(source, "function renderCredentialRow(c)") {
+		t.Fatal("expected compact table row renderer")
+	}
+	rowStart := strings.Index(source, "function renderCredentialRow(c)")
+	rowEnd := strings.Index(source[rowStart:], "function highlightSelectedRow")
+	if rowEnd < 0 {
+		t.Fatal("could not bound renderCredentialRow")
+	}
+	rowBody := source[rowStart : rowStart+rowEnd]
+	if strings.Contains(rowBody, "fillCredentialUsage") {
+		t.Fatal("credential list row must not auto-fetch billing (N+1)")
+	}
+	if strings.Contains(rowBody, "/billing") {
+		t.Fatal("credential list row must not request /billing")
+	}
+
+	// On-demand helper remains available for detail view.
+	if !strings.Contains(source, "function fillCredentialUsage(box, credId, force)") {
+		t.Fatal("expected on-demand fillCredentialUsage")
+	}
+	if !strings.Contains(source, "BILLING_CONCURRENCY") {
+		t.Fatal("expected billing concurrency limit")
+	}
+	if !strings.Contains(source, "enqueueBilling") {
+		t.Fatal("expected queued billing loader")
+	}
+}
+
+func TestAdminSessionUsesSessionStorage(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	for _, marker := range []string{
+		`SESSION_KEY = "grokbuild_admin_key"`,
+		"sessionStorage.getItem(SESSION_KEY)",
+		"sessionStorage.setItem(SESSION_KEY",
+		"function loadSession()",
+		"function saveSession(key)",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("app.js missing session marker %q", marker)
+		}
+	}
+	if strings.Contains(source, "localStorage") {
+		t.Fatal("admin key must not use long-lived localStorage")
+	}
+}
+
+func TestRuntimeHealthDualStateModel(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	for _, marker := range []string{
+		"function runtimeHealth(c)",
+		"function configState(c)",
+		`label: "健康"`,
+		`label: "冷却"`,
+		`label: "隔离"`,
+		`label: "已启用"`,
+		`label: "已禁用"`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("app.js missing health model marker %q", marker)
+		}
+	}
+}
+
+func TestPageStateAndOverviewShell(t *testing.T) {
+	index, err := ReadStatic("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	for _, marker := range []string{
+		`id="page-overview"`,
+		`id="page-credentials"`,
+		`id="cred-loading"`,
+		`id="cred-error"`,
+		`id="cred-empty"`,
+		`id="cred-table"`,
+		`id="cred-search"`,
+		`id="cred-filter-health"`,
+		`id="crisis-banner"`,
+		`id="drawer"`,
+		`data-route="overview"`,
+		`data-route="clients"`,
+		`app.js?v=6`,
+		`app.css?v=6`,
+	} {
+		if !strings.Contains(html, marker) {
+			t.Fatalf("index.html missing shell marker %q", marker)
+		}
+	}
+	// Integration is folded into clients page.
+	if strings.Contains(html, `data-route="integration"`) {
+		t.Fatal("integration should be merged into clients page")
+	}
+}
+
+func TestCredentialListSupportsFilterPagination(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	for _, marker := range []string{
+		"PAGE_SIZE = 50",
+		"function applyCredFiltersAndRender()",
+		"function renderPager(pages)",
+		`health === "problem"`,
+		"function upsertCredentialLocal(c)",
+		"function removeCredentialLocal(id)",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("app.js missing list ops marker %q", marker)
+		}
+	}
+}
+
+func TestCSSContainsOpsConsolePrimitives(t *testing.T) {
+	css, err := ReadStatic("app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(css)
+	for _, marker := range []string{
+		".data-table",
+		".drawer-panel",
+		".crisis-banner",
+		".stat-grid",
+		".status-dot-ok",
+		".status-dot-danger",
+		"prefers-reduced-motion",
+		":focus-visible",
+		/* Geist Dark tokens from design.dark.md */
+		"--bg: #000000",
+		"--text: #ededed",
+		"--accent: #006efe",
+		"--primary: #ededed",
+		"--primary-fg: #000000",
+		"Geist Dark",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("app.css missing primitive %q", marker)
 		}
 	}
 }
@@ -127,7 +287,6 @@ func TestAssetsHandlerNotFound(t *testing.T) {
 }
 
 func TestAssetsDoNotServeIndexAsCredentials(t *testing.T) {
-	// Ensure index content is not served under a credentials-like asset path.
 	h := http.StripPrefix("/admin/ui/", AssetsHandler())
 	req := httptest.NewRequest(http.MethodGet, "/admin/ui/credentials", nil)
 	rec := httptest.NewRecorder()

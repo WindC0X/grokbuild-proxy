@@ -1,15 +1,29 @@
-/* grokbuild Admin SPA — in-memory admin key, textContent-only DOM */
+/* grokbuild Admin SPA — ops console (sessionStorage key, textContent-only DOM) */
 (function () {
   "use strict";
 
   var API_BASE = "";
+  var SESSION_KEY = "grokbuild_admin_key";
+  var PAGE_SIZE = 50;
+  var BILLING_CONCURRENCY = 3;
 
   var state = {
     key: "",
     route: "login",
     system: null,
     settings: null,
+    credentials: [],
+    clients: [],
+    credFilter: { q: "", health: "all", sort: "priority_desc", page: 1 },
+    selectedCredId: "",
+    crisisDismissed: false,
     busy: false,
+    listAbort: null,
+    billingCache: {},
+    billingInflight: {},
+    billingQueue: [],
+    billingActive: 0,
+    focusReturn: null,
   };
 
   // ---------- DOM helpers (no innerHTML for untrusted data) ----------
@@ -38,7 +52,14 @@
     if (node) node.textContent = text == null ? "" : String(text);
   }
 
-  // ---------- Toast ----------
+  function lineMeta(label, value) {
+    var row = el("div", "meta-row");
+    row.appendChild(el("span", "meta-k", label));
+    row.appendChild(el("span", "meta-v", value == null || value === "" ? "—" : String(value)));
+    return row;
+  }
+
+  // ---------- Toast (light feedback only) ----------
 
   function toast(message, kind) {
     var host = $("toast-host");
@@ -51,10 +72,11 @@
     }, 3200);
   }
 
-  // ---------- Modal ----------
+  // ---------- Modal / drawer a11y ----------
 
   function openModal(title, bodyNode, footNodes) {
     var modal = $("modal");
+    state.focusReturn = document.activeElement;
     setText($("modal-title"), title || "对话框");
     var body = $("modal-body");
     clear(body);
@@ -65,12 +87,61 @@
       foot.appendChild(n);
     });
     show(modal, true);
+    trapFocus(modal);
+    var first = modal.querySelector("button, input, select, textarea, a[href]");
+    if (first) first.focus();
   }
 
   function closeModal() {
     show($("modal"), false);
     clear($("modal-body"));
     clear($("modal-foot"));
+    releaseFocus();
+  }
+
+  function openDrawer(title, bodyNode, footNodes) {
+    var drawer = $("drawer");
+    state.focusReturn = document.activeElement;
+    setText($("drawer-title"), title || "详情");
+    var body = $("drawer-body");
+    clear(body);
+    if (bodyNode) body.appendChild(bodyNode);
+    var foot = $("drawer-foot");
+    clear(foot);
+    (footNodes || []).forEach(function (n) {
+      foot.appendChild(n);
+    });
+    show(drawer, true);
+    drawer.setAttribute("aria-hidden", "false");
+    trapFocus(drawer);
+    var first = drawer.querySelector("button, input, select, textarea, a[href]");
+    if (first) first.focus();
+  }
+
+  function closeDrawer() {
+    var drawer = $("drawer");
+    show(drawer, false);
+    if (drawer) drawer.setAttribute("aria-hidden", "true");
+    clear($("drawer-body"));
+    clear($("drawer-foot"));
+    state.selectedCredId = "";
+    releaseFocus();
+    highlightSelectedRow();
+  }
+
+  function trapFocus(container) {
+    // Focus trapping is approximate: Esc handled globally.
+    container._trap = true;
+  }
+
+  function releaseFocus() {
+    var ret = state.focusReturn;
+    state.focusReturn = null;
+    if (ret && typeof ret.focus === "function") {
+      try {
+        ret.focus();
+      } catch (_) {}
+    }
   }
 
   // ---------- API ----------
@@ -84,19 +155,17 @@
     return "请求失败 HTTP " + status;
   }
 
-  function api(method, path, body) {
-    var headers = {
-      Accept: "application/json",
-    };
-    if (state.key) {
-      headers.Authorization = "Bearer " + state.key;
-    }
-    var opts = { method: method, headers: headers };
+  function api(method, path, body, opts) {
+    opts = opts || {};
+    var headers = { Accept: "application/json" };
+    if (state.key) headers.Authorization = "Bearer " + state.key;
+    var init = { method: method, headers: headers };
+    if (opts.signal) init.signal = opts.signal;
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
-      opts.body = typeof body === "string" ? body : JSON.stringify(body);
+      init.body = typeof body === "string" ? body : JSON.stringify(body);
     }
-    return fetch(API_BASE + path, opts).then(function (res) {
+    return fetch(API_BASE + path, init).then(function (res) {
       return res.text().then(function (text) {
         var data = null;
         if (text) {
@@ -107,8 +176,9 @@
           }
         }
         if (res.status === 401) {
+          clearSession();
           logout(true);
-          var err401 = new Error(apiErrorMessage(data, res.status) || "未授权");
+          var err401 = new Error(apiErrorMessage(data, res.status) || "会话已失效，请重新登录");
           err401.status = 401;
           throw err401;
         }
@@ -137,8 +207,9 @@
           }
         }
         if (res.status === 401) {
+          clearSession();
           logout(true);
-          throw new Error(apiErrorMessage(data, res.status) || "未授权");
+          throw new Error(apiErrorMessage(data, res.status) || "会话已失效，请重新登录");
         }
         if (!res.ok) {
           var err = new Error(apiErrorMessage(data, res.status));
@@ -151,17 +222,41 @@
     });
   }
 
+  // ---------- Session ----------
+
+  function loadSession() {
+    try {
+      return (sessionStorage.getItem(SESSION_KEY) || "").trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function saveSession(key) {
+    try {
+      if (key) sessionStorage.setItem(SESSION_KEY, key);
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch (_) {}
+  }
+
+  function clearSession() {
+    state.key = "";
+    saveSession("");
+  }
+
   // ---------- Routing ----------
 
   function parseRoute() {
     var hash = (location.hash || "").replace(/^#\/?/, "");
-    var name = (hash.split("?")[0] || "").split("/")[0] || "";
-    if (!name) name = state.key ? "credentials" : "login";
+    var parts = hash.split("?");
+    var name = (parts[0] || "").split("/")[0] || "";
+    if (!name) name = state.key ? "overview" : "login";
+    if (name === "integration") name = "clients";
     return name;
   }
 
   function navigate(route) {
-    if (!route) route = "credentials";
+    if (!route) route = "overview";
     location.hash = "#/" + route;
   }
 
@@ -188,30 +283,36 @@
 
     if (route === "login") {
       if (state.key) {
-        navigate("credentials");
+        navigate("overview");
       }
       return;
     }
 
     setActiveNav(route);
+    show($("page-overview"), route === "overview");
     show($("page-credentials"), route === "credentials");
     show($("page-clients"), route === "clients");
     show($("page-settings"), route === "settings");
     show($("page-system"), route === "system");
-    show($("page-integration"), route === "integration");
 
-    if (route === "credentials") loadCredentials();
-    else if (route === "clients") loadClients();
-    else if (route === "settings") loadSettings();
+    if (route === "overview") loadOverview();
+    else if (route === "credentials") loadCredentials();
+    else if (route === "clients") {
+      loadClients();
+      renderIntegration();
+    } else if (route === "settings") loadSettings();
     else if (route === "system") loadSystem();
-    else if (route === "integration") renderIntegration();
   }
 
   // ---------- Auth ----------
 
   function logout(silent) {
-    state.key = "";
+    clearSession();
     state.system = null;
+    state.credentials = [];
+    state.clients = [];
+    closeDrawer();
+    closeModal();
     if (!silent) toast("已退出", "ok");
     navigate("login");
     render();
@@ -232,9 +333,11 @@
     return api("GET", "/admin/system")
       .then(function (sys) {
         state.system = sys;
+        saveSession(key);
         setText($("shell-version"), (sys && sys.version) || "管理后台");
         toast("登录成功", "ok");
-        navigate("credentials");
+        updateTopbarStatus(sys);
+        navigate("overview");
         render();
       })
       .catch(function (err) {
@@ -247,23 +350,30 @@
       });
   }
 
-  // ---------- Format helpers ----------
+  // ---------- Formatters ----------
 
   function fmtTime(v) {
     if (!v) return "—";
-    try {
-      var d = new Date(v);
-      if (isNaN(d.getTime())) return String(v);
-      return d.toLocaleString();
-    } catch (_) {
-      return String(v);
-    }
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toLocaleString();
   }
 
   function shortId(id) {
-    if (!id) return "—";
-    if (id.length <= 12) return id;
+    id = String(id || "");
+    if (id.length <= 12) return id || "—";
     return id.slice(0, 6) + "…" + id.slice(-4);
+  }
+
+  function num(v) {
+    var n = Number(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function optionalNum(v) {
+    if (v == null || v === "") return null;
+    var n = Number(v);
+    return isNaN(n) ? null : n;
   }
 
   function inspectionStatusText(status) {
@@ -279,101 +389,543 @@
     return labels[status] || status || "未记录";
   }
 
-  // ---------- Credentials ----------
+  // ---------- Health model ----------
 
-  function loadCredentials() {
-    var list = $("cred-list");
-    var empty = $("cred-empty");
-    if (!list) return;
-    clear(list);
-    show(empty, false);
-    api("GET", "/admin/credentials")
-      .then(function (data) {
-        var creds = (data && data.credentials) || [];
-        if (!creds.length) {
-          show(empty, true);
-          return;
-        }
-        creds.forEach(function (c) {
-          list.appendChild(renderCredentialCard(c));
+  function runtimeHealth(c) {
+    if (!c) return { key: "unknown", label: "未知", cls: "badge-off" };
+    if (c.lifecycle_state === "quarantined") {
+      return { key: "quarantined", label: "隔离", cls: "badge-danger" };
+    }
+    if (!c.enabled) {
+      return { key: "disabled", label: "已禁用", cls: "badge-off" };
+    }
+    var now = Date.now();
+    if (c.cooldown_until && new Date(c.cooldown_until).getTime() > now) {
+      return { key: "cooling", label: "冷却", cls: "badge-warn" };
+    }
+    var expired = c.expires_at && new Date(c.expires_at).getTime() <= now;
+    if (expired && !c.has_refresh_token) {
+      return { key: "expired", label: "过期", cls: "badge-danger" };
+    }
+    if (expired && c.has_refresh_token) {
+      return { key: "expired", label: "令牌过期(可刷新)", cls: "badge-warn" };
+    }
+    var err = String(c.last_error || "").toLowerCase();
+    var insp = String(c.last_inspection_status || "");
+    if (insp === "unauthorized" || err.indexOf("401") >= 0 || err.indexOf("unauthorized") >= 0) {
+      return { key: "auth_failed", label: "认证失效", cls: "badge-danger" };
+    }
+    if (insp === "rate_limited" || err.indexOf("429") >= 0) {
+      return { key: "cooling", label: "限流", cls: "badge-warn" };
+    }
+    if (c.failure_count > 0 && c.last_error) {
+      return { key: "problem", label: "异常", cls: "badge-warn" };
+    }
+    return { key: "healthy", label: "健康", cls: "badge-ok" };
+  }
+
+  function configState(c) {
+    if (!c) return { label: "—", cls: "badge-off" };
+    if (c.lifecycle_state === "quarantined") return { label: "隔离配置", cls: "badge-danger" };
+    if (c.enabled) return { label: "已启用", cls: "badge-ok" };
+    return { label: "已禁用", cls: "badge-off" };
+  }
+
+  function isProblem(c) {
+    var h = runtimeHealth(c).key;
+    return h !== "healthy";
+  }
+
+  // ---------- Topbar / crisis ----------
+
+  function updateTopbarStatus(sys) {
+    var pool = (sys && sys.pool) || {};
+    var total = num(pool.total);
+    var available = num(pool.available);
+    var text = $("status-text");
+    var dot = $("status-dot");
+    if (!text || !dot) return;
+    if (total === 0) {
+      setText(text, "无凭证");
+      dot.className = "status-dot status-dot-warn";
+    } else if (available === 0) {
+      setText(text, "不可用 0/" + total);
+      dot.className = "status-dot status-dot-danger";
+    } else if (available < total) {
+      setText(text, "可用 " + available + "/" + total);
+      dot.className = "status-dot status-dot-warn";
+    } else {
+      setText(text, "可用 " + available + "/" + total);
+      dot.className = "status-dot status-dot-ok";
+    }
+    updateCrisisBanner(sys);
+  }
+
+  function updateCrisisBanner(sys) {
+    var banner = $("crisis-banner");
+    if (!banner) return;
+    var pool = (sys && sys.pool) || {};
+    var total = num(pool.total);
+    var available = num(pool.available);
+    var severe = total > 0 && available === 0;
+    if (!severe || state.crisisDismissed) {
+      show(banner, false);
+      return;
+    }
+    setText($("crisis-title"), "账号池不可用");
+    setText(
+      $("crisis-detail"),
+      "共 " + total + " 个账号，当前可用 0。请检查认证失效、冷却或隔离状态。"
+    );
+    show(banner, true);
+  }
+
+  // ---------- Overview ----------
+
+  function loadOverview() {
+    var body = $("overview-body");
+    var stats = $("overview-stats");
+    if (!stats) return;
+    clear(stats);
+    if (body) {
+      clear(body);
+      body.appendChild(el("p", "muted", "加载概览…"));
+    }
+    api("GET", "/admin/system")
+      .then(function (sys) {
+        state.system = sys;
+        setText($("shell-version"), (sys && sys.version) || "管理后台");
+        updateTopbarStatus(sys);
+        renderOverview(sys);
+        // Refresh credential cache for checklist without billing fan-out.
+        return api("GET", "/admin/credentials").then(function (data) {
+          state.credentials = (data && data.credentials) || [];
+          renderChecklist();
         });
       })
       .catch(function (err) {
-        toast("加载凭证失败: " + err.message, "err");
+        if (body) {
+          clear(body);
+          var panel = el("div", "error-panel");
+          panel.appendChild(el("h3", "", "概览加载失败"));
+          panel.appendChild(el("p", "muted", err.message || "未知错误"));
+          var retry = el("button", "btn btn-primary", "重试");
+          retry.type = "button";
+          retry.addEventListener("click", loadOverview);
+          panel.appendChild(retry);
+          body.appendChild(panel);
+        }
       });
   }
 
-  function renderCredentialCard(c) {
-    var card = el("article", "card cred-card");
-    card.dataset.id = c.id || "";
+  function renderOverview(sys) {
+    var stats = $("overview-stats");
+    var body = $("overview-body");
+    if (!stats || !body) return;
+    clear(stats);
+    clear(body);
+    var pool = (sys && sys.pool) || {};
+    var cards = [
+      ["可用", String(num(pool.available)) + " / " + String(num(pool.total)), "ok"],
+      ["冷却", String(num(pool.cooling)), "warn"],
+      ["禁用", String(num(pool.disabled)), "off"],
+      ["过期", String(num(pool.expired)), "danger"],
+    ];
+    cards.forEach(function (item) {
+      var card = el("div", "stat-card tone-" + item[2]);
+      card.appendChild(el("div", "stat-label", item[0]));
+      card.appendChild(el("div", "stat-value", item[1]));
+      stats.appendChild(card);
+    });
 
-    var top = el("div", "cred-top");
-    var left = el("div");
-    var title = el("h3", "cred-title", c.name || c.email || c.id || "（未命名）");
-    left.appendChild(title);
-    if (c.email && c.email !== c.name) {
-      left.appendChild(el("div", "muted", c.email));
+    var info = el("div", "card stack");
+    info.appendChild(el("h3", "", "池状态详情"));
+    info.appendChild(lineMeta("下次恢复", pool.next_recovery_at ? fmtTime(pool.next_recovery_at) : "—"));
+    info.appendChild(lineMeta("最近成功", pool.last_success_at ? fmtTime(pool.last_success_at) : "—"));
+    info.appendChild(lineMeta("缺少令牌", String(num(pool.missing_tokens))));
+    if (sys.upstream) {
+      info.appendChild(lineMeta("上游", sys.upstream.base_url || "—"));
     }
-    top.appendChild(left);
+    body.appendChild(info);
 
-    var quarantined = c.lifecycle_state === "quarantined";
-    var badge = el(
-      "span",
-      "badge " + (c.enabled ? "badge-ok" : quarantined ? "badge-danger" : "badge-off"),
-      c.enabled ? "已启用" : quarantined ? "已隔离" : "已禁用"
+    var actions = el("div", "card stack");
+    actions.appendChild(el("h3", "", "快捷操作"));
+    var row = el("div", "row gap wrap");
+    var goProblem = el("button", "btn", "查看需处理账号");
+    goProblem.type = "button";
+    goProblem.addEventListener("click", function () {
+      state.credFilter.health = "problem";
+      var sel = $("cred-filter-health");
+      if (sel) sel.value = "problem";
+      navigate("credentials");
+    });
+    var goClients = el("button", "btn", "客户端接入");
+    goClients.type = "button";
+    goClients.addEventListener("click", function () {
+      navigate("clients");
+    });
+    row.appendChild(goProblem);
+    row.appendChild(goClients);
+    actions.appendChild(row);
+    body.appendChild(actions);
+  }
+
+  function renderChecklist() {
+    var host = $("overview-checklist");
+    if (!host) return;
+    var hasCred = state.credentials.length > 0;
+    var hasClient = state.clients.length > 0;
+    // Lazy-load clients if unknown.
+    if (!hasClient && state.key) {
+      api("GET", "/admin/clients")
+        .then(function (data) {
+          state.clients = (data && data.clients) || [];
+          paintChecklist(host, hasCred, state.clients.length > 0);
+        })
+        .catch(function () {
+          paintChecklist(host, hasCred, false);
+        });
+      return;
+    }
+    paintChecklist(host, hasCred, hasClient);
+  }
+
+  function paintChecklist(host, hasCred, hasClient) {
+    clear(host);
+    if (hasCred && hasClient) {
+      show(host, false);
+      return;
+    }
+    show(host, true);
+    host.appendChild(el("h3", "", "启动清单"));
+    host.appendChild(el("p", "muted", "完成下列步骤后即可在 Claude Code / OpenAI 客户端使用本代理。"));
+    var list = el("ol", "checklist");
+    list.appendChild(checkItem(hasCred, "添加至少一个 Grok 账号", function () {
+      navigate("credentials");
+      startDeviceLogin();
+    }, "浏览器登录"));
+    list.appendChild(checkItem(hasClient, "创建客户端密钥", function () {
+      navigate("clients");
+      openCreateClientModal();
+    }, "创建密钥"));
+    list.appendChild(checkItem(hasCred && hasClient, "复制接入配置", function () {
+      navigate("clients");
+    }, "打开接入"));
+    host.appendChild(list);
+  }
+
+  function checkItem(done, label, onClick, btnLabel) {
+    var li = el("li", done ? "check-done" : "check-todo");
+    li.appendChild(el("span", "", (done ? "✓ " : "○ ") + label));
+    if (!done && onClick) {
+      var b = el("button", "btn btn-sm btn-primary", btnLabel || "前往");
+      b.type = "button";
+      b.addEventListener("click", onClick);
+      li.appendChild(b);
+    }
+    return li;
+  }
+
+  // ---------- Credentials ----------
+
+  function setCredPanel(mode) {
+    show($("cred-loading"), mode === "loading");
+    show($("cred-error"), mode === "error");
+    show($("cred-empty"), mode === "empty");
+    show($("cred-filtered-empty"), mode === "filtered");
+    show($("cred-table-wrap"), mode === "table");
+  }
+
+  function loadCredentials() {
+    if (state.listAbort) {
+      try {
+        state.listAbort.abort();
+      } catch (_) {}
+    }
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    state.listAbort = controller;
+    setCredPanel("loading");
+    api("GET", "/admin/credentials", undefined, controller ? { signal: controller.signal } : {})
+      .then(function (data) {
+        state.credentials = (data && data.credentials) || [];
+        applyCredFiltersAndRender();
+        // Refresh pool status without coupling to billing.
+        return api("GET", "/admin/system").then(function (sys) {
+          state.system = sys;
+          updateTopbarStatus(sys);
+        });
+      })
+      .catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        setCredPanel("error");
+        setText($("cred-error-msg"), err.message || "加载失败");
+      });
+  }
+
+  function applyCredFiltersAndRender() {
+    var q = (($("cred-search") && $("cred-search").value) || state.credFilter.q || "").trim().toLowerCase();
+    var health = ($("cred-filter-health") && $("cred-filter-health").value) || state.credFilter.health || "all";
+    var sort = ($("cred-sort") && $("cred-sort").value) || state.credFilter.sort || "priority_desc";
+    state.credFilter.q = q;
+    state.credFilter.health = health;
+    state.credFilter.sort = sort;
+
+    var list = state.credentials.slice();
+    if (!list.length) {
+      setCredPanel("empty");
+      setText($("cred-count"), "0 个账号");
+      return;
+    }
+
+    list = list.filter(function (c) {
+      if (q) {
+        var hay = [c.name, c.email, c.id].join(" ").toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      var h = runtimeHealth(c).key;
+      if (health === "all") return true;
+      if (health === "problem") return isProblem(c);
+      return h === health;
+    });
+
+    list.sort(function (a, b) {
+      switch (sort) {
+        case "priority_asc":
+          return num(a.priority) - num(b.priority);
+        case "expires_asc":
+          return new Date(a.expires_at || 0) - new Date(b.expires_at || 0);
+        case "updated_desc":
+          return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+        case "name_asc":
+          return String(a.name || a.email || a.id || "").localeCompare(String(b.name || b.email || b.id || ""));
+        case "priority_desc":
+        default:
+          return num(b.priority) - num(a.priority);
+      }
+    });
+
+    var total = list.length;
+    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (state.credFilter.page > pages) state.credFilter.page = pages;
+    if (state.credFilter.page < 1) state.credFilter.page = 1;
+    var start = (state.credFilter.page - 1) * PAGE_SIZE;
+    var pageItems = list.slice(start, start + PAGE_SIZE);
+
+    setText(
+      $("cred-count"),
+      "显示 " + (total ? start + 1 : 0) + "–" + (start + pageItems.length) + " / 筛选 " + total + " · 共 " + state.credentials.length
     );
-    top.appendChild(badge);
-    card.appendChild(top);
 
-    var meta = el("div", "cred-meta");
-    meta.appendChild(lineMeta("编号", shortId(c.id)));
-    meta.appendChild(lineMeta("优先级", String(c.priority != null ? c.priority : 0)));
-    meta.appendChild(lineMeta("过期时间", fmtTime(c.expires_at)));
-    meta.appendChild(
+    if (!pageItems.length) {
+      setCredPanel("filtered");
+      return;
+    }
+
+    setCredPanel("table");
+    var tbody = $("cred-tbody");
+    clear(tbody);
+    pageItems.forEach(function (c) {
+      tbody.appendChild(renderCredentialRow(c));
+    });
+    renderPager(pages);
+    highlightSelectedRow();
+  }
+
+  function renderPager(pages) {
+    var host = $("cred-pager");
+    if (!host) return;
+    clear(host);
+    if (pages <= 1) return;
+    var prev = el("button", "btn btn-sm", "上一页");
+    prev.type = "button";
+    prev.disabled = state.credFilter.page <= 1;
+    prev.addEventListener("click", function () {
+      state.credFilter.page--;
+      applyCredFiltersAndRender();
+    });
+    var next = el("button", "btn btn-sm", "下一页");
+    next.type = "button";
+    next.disabled = state.credFilter.page >= pages;
+    next.addEventListener("click", function () {
+      state.credFilter.page++;
+      applyCredFiltersAndRender();
+    });
+    host.appendChild(prev);
+    host.appendChild(el("span", "muted", "第 " + state.credFilter.page + " / " + pages + " 页"));
+    host.appendChild(next);
+  }
+
+  function renderCredentialRow(c) {
+    var tr = el("tr", "cred-row");
+    tr.dataset.id = c.id || "";
+    if (c.id === state.selectedCredId) tr.classList.add("is-selected");
+
+    var nameTd = el("td");
+    var title = el("div", "cred-name", c.name || c.email || c.id || "（未命名）");
+    nameTd.appendChild(title);
+    if (c.email && c.email !== c.name) nameTd.appendChild(el("div", "muted small", c.email));
+    nameTd.appendChild(el("div", "muted small mono", shortId(c.id)));
+    tr.appendChild(nameTd);
+
+    var cfg = configState(c);
+    var cfgTd = el("td");
+    cfgTd.appendChild(el("span", "badge " + cfg.cls, cfg.label));
+    tr.appendChild(cfgTd);
+
+    var run = runtimeHealth(c);
+    var runTd = el("td");
+    var runBadge = el("span", "badge " + run.cls, run.label);
+    runBadge.setAttribute("aria-label", cfg.label + "，" + run.label);
+    runTd.appendChild(runBadge);
+    tr.appendChild(runTd);
+
+    tr.appendChild(el("td", "mono", String(c.priority != null ? c.priority : 0)));
+    tr.appendChild(el("td", "small", fmtTime(c.expires_at)));
+    tr.appendChild(el("td", "small err-cell", c.last_error || "—"));
+
+    var act = el("td", "col-actions");
+    var detail = el("button", "btn btn-sm btn-primary", "详情");
+    detail.type = "button";
+    detail.addEventListener("click", function (e) {
+      e.stopPropagation();
+      openCredentialDetail(c.id);
+    });
+    act.appendChild(detail);
+
+    var more = el("button", "btn btn-sm", "⋯");
+    more.type = "button";
+    more.setAttribute("aria-label", "更多操作");
+    more.addEventListener("click", function (e) {
+      e.stopPropagation();
+      openCredentialActions(c);
+    });
+    act.appendChild(more);
+    tr.appendChild(act);
+
+    tr.addEventListener("click", function () {
+      openCredentialDetail(c.id);
+    });
+    return tr;
+  }
+
+  function highlightSelectedRow() {
+    var rows = document.querySelectorAll("#cred-tbody tr");
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.toggle("is-selected", rows[i].dataset.id === state.selectedCredId);
+    }
+  }
+
+  function findCredential(id) {
+    for (var i = 0; i < state.credentials.length; i++) {
+      if (state.credentials[i].id === id) return state.credentials[i];
+    }
+    return null;
+  }
+
+  function upsertCredentialLocal(c) {
+    if (!c || !c.id) return;
+    var found = false;
+    for (var i = 0; i < state.credentials.length; i++) {
+      if (state.credentials[i].id === c.id) {
+        state.credentials[i] = c;
+        found = true;
+        break;
+      }
+    }
+    if (!found) state.credentials.unshift(c);
+  }
+
+  function removeCredentialLocal(id) {
+    state.credentials = state.credentials.filter(function (c) {
+      return c.id !== id;
+    });
+  }
+
+  function openCredentialActions(c) {
+    var body = el("div", "stack");
+    body.appendChild(el("p", "muted", (c.name || c.email || c.id || "") + " · " + runtimeHealth(c).label));
+
+    function actionBtn(label, cls, fn) {
+      var b = el("button", "btn " + (cls || ""), label);
+      b.type = "button";
+      b.addEventListener("click", function () {
+        closeModal();
+        fn();
+      });
+      return b;
+    }
+
+    var actions = el("div", "stack");
+    actions.appendChild(
+      actionBtn(c.enabled ? "禁用" : "启用", "", function () {
+        toggleCredential(c);
+      })
+    );
+    actions.appendChild(
+      actionBtn("刷新令牌", "", function () {
+        refreshCredential(c);
+      })
+    );
+    actions.appendChild(
+      actionBtn("设置代理", "", function () {
+        showCredentialProxy(c);
+      })
+    );
+    actions.appendChild(
+      actionBtn("查看账单", "", function () {
+        showBilling(c);
+      })
+    );
+    actions.appendChild(
+      actionBtn("删除", "btn-danger", function () {
+        deleteCredential(c);
+      })
+    );
+    body.appendChild(actions);
+
+    var cancel = el("button", "btn", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    openModal("账号操作", body, [cancel]);
+  }
+
+  function openCredentialDetail(id) {
+    var c = findCredential(id);
+    if (!c) return;
+    state.selectedCredId = id;
+    highlightSelectedRow();
+
+    var body = el("div", "stack");
+    body.appendChild(el("h4", "", c.name || c.email || c.id || "（未命名）"));
+    body.appendChild(lineMeta("编号", c.id || "—"));
+    body.appendChild(lineMeta("邮箱", c.email || "—"));
+    body.appendChild(lineMeta("配置状态", configState(c).label));
+    body.appendChild(lineMeta("运行状态", runtimeHealth(c).label));
+    body.appendChild(lineMeta("优先级", String(c.priority != null ? c.priority : 0)));
+    body.appendChild(lineMeta("过期时间", fmtTime(c.expires_at)));
+    body.appendChild(
       lineMeta(
         "出站代理",
         c.proxy_mode === "url" ? c.proxy_url || "已配置" : c.proxy_mode === "direct" ? "直连" : "继承全局"
       )
     );
-    if (c.disable_reason) meta.appendChild(lineMeta("停用原因", c.disable_reason));
-    if (c.quarantined_at) meta.appendChild(lineMeta("隔离时间", fmtTime(c.quarantined_at)));
-    meta.appendChild(
+    if (c.disable_reason) body.appendChild(lineMeta("停用原因", c.disable_reason));
+    if (c.quarantined_at) body.appendChild(lineMeta("隔离时间", fmtTime(c.quarantined_at)));
+    body.appendChild(
       lineMeta(
         "令牌",
-        (c.has_access_token ? "访问令牌" : "—") +
-          " / " +
-          (c.has_refresh_token ? "刷新令牌" : "—")
+        (c.has_access_token ? "访问令牌" : "—") + " / " + (c.has_refresh_token ? "刷新令牌" : "—")
       )
     );
-    if (c.failure_count) {
-      meta.appendChild(lineMeta("失败次数", String(c.failure_count)));
-    }
-    if (c.last_error) {
-      var errLine = el("div");
-      errLine.appendChild(el("span", "badge badge-danger", "错误"));
-      errLine.appendChild(document.createTextNode(" "));
-      errLine.appendChild(el("span", "", c.last_error));
-      meta.appendChild(errLine);
-    }
-    if (c.cooldown_until) {
-      meta.appendChild(lineMeta("冷却至", fmtTime(c.cooldown_until)));
-    }
+    if (c.access_token) body.appendChild(lineMeta("访问令牌(脱敏)", c.access_token));
+    if (c.failure_count) body.appendChild(lineMeta("失败次数", String(c.failure_count)));
+    if (c.last_error) body.appendChild(lineMeta("最近错误", c.last_error));
+    if (c.cooldown_until) body.appendChild(lineMeta("冷却至", fmtTime(c.cooldown_until)));
     if (c.last_inspection_at || c.last_inspection_status || c.last_inspection_error) {
-      meta.appendChild(lineMeta("最近巡检", fmtTime(c.last_inspection_at)));
-      meta.appendChild(lineMeta("巡检结果", inspectionStatusText(c.last_inspection_status)));
-      if (c.last_inspection_error) {
-        meta.appendChild(lineMeta("巡检详情", c.last_inspection_error));
-      }
+      body.appendChild(lineMeta("最近巡检", fmtTime(c.last_inspection_at)));
+      body.appendChild(lineMeta("巡检结果", inspectionStatusText(c.last_inspection_status)));
+      if (c.last_inspection_error) body.appendChild(lineMeta("巡检详情", c.last_inspection_error));
     }
-    if (c.access_token) {
-      meta.appendChild(lineMeta("访问令牌(脱敏)", c.access_token));
-    }
-    var usageBox = el("div", "usage-box");
-    usageBox.appendChild(el("div", "muted", "额度加载中…"));
-    meta.appendChild(usageBox);
-    card.appendChild(meta);
-    // Async fill usage summary on each card (no raw JSON).
-    fillCredentialUsage(usageBox, c.id);
 
     var prioRow = el("div", "priority-row");
     prioRow.appendChild(el("span", "label", "优先级"));
@@ -390,13 +942,16 @@
         return;
       }
       prioBtn.disabled = true;
-      // PUT /admin/credentials/{id}/priority  body: {"priority":n}
-      api("PUT", "/admin/credentials/" + encodeURIComponent(c.id) + "/priority", {
-        priority: n,
-      })
-        .then(function () {
+      api("PUT", "/admin/credentials/" + encodeURIComponent(c.id) + "/priority", { priority: n })
+        .then(function (updated) {
           toast("优先级已更新", "ok");
-          loadCredentials();
+          if (updated && updated.id) upsertCredentialLocal(updated);
+          else {
+            c.priority = n;
+            upsertCredentialLocal(c);
+          }
+          applyCredFiltersAndRender();
+          openCredentialDetail(c.id);
         })
         .catch(function (err) {
           toast("更新失败: " + err.message, "err");
@@ -407,116 +962,128 @@
     });
     prioRow.appendChild(prioInput);
     prioRow.appendChild(prioBtn);
-    card.appendChild(prioRow);
+    body.appendChild(prioRow);
 
-    var actions = el("div", "cred-actions");
+    // On-demand billing only (never fan-out on list render).
+    var usageBox = el("div", "usage-box");
+    usageBox.appendChild(el("div", "muted", "额度未加载"));
+    var loadUsage = el("button", "btn btn-sm", "加载额度");
+    loadUsage.type = "button";
+    loadUsage.addEventListener("click", function () {
+      fillCredentialUsage(usageBox, c.id, true);
+    });
+    body.appendChild(usageBox);
+    body.appendChild(loadUsage);
 
-    var toggle = el("button", "btn btn-sm", c.enabled ? "禁用" : "启用");
+    var foot = [];
+    var toggle = el("button", "btn", c.enabled ? "禁用" : "启用");
     toggle.type = "button";
     toggle.addEventListener("click", function () {
-      toggle.disabled = true;
-      // POST /admin/credentials/{id}/disable  body: {"enabled": true|false}
-      api("POST", "/admin/credentials/" + encodeURIComponent(c.id) + "/disable", {
-        enabled: !c.enabled,
-      })
-        .then(function () {
-          toast(c.enabled ? "已禁用" : "已启用", "ok");
-          loadCredentials();
-        })
-        .catch(function (err) {
-          toast("切换失败: " + err.message, "err");
-        })
-        .finally(function () {
-          toggle.disabled = false;
-        });
+      toggleCredential(c);
     });
-    actions.appendChild(toggle);
-
-    var refresh = el("button", "btn btn-sm", "刷新令牌");
+    foot.push(toggle);
+    var refresh = el("button", "btn", "刷新令牌");
     refresh.type = "button";
     refresh.addEventListener("click", function () {
-      refresh.disabled = true;
-      api("POST", "/admin/credentials/" + encodeURIComponent(c.id) + "/refresh")
-        .then(function () {
-          toast("令牌已刷新", "ok");
-          loadCredentials();
-        })
-        .catch(function (err) {
-          toast("刷新令牌失败: " + err.message, "err");
-        })
-        .finally(function () {
-          refresh.disabled = false;
-        });
+      refreshCredential(c);
     });
-    actions.appendChild(refresh);
-
-    var proxyBtn = el("button", "btn btn-sm", "代理");
+    foot.push(refresh);
+    var proxyBtn = el("button", "btn", "代理");
     proxyBtn.type = "button";
     proxyBtn.addEventListener("click", function () {
       showCredentialProxy(c);
     });
-    actions.appendChild(proxyBtn);
-
-    var billing = el("button", "btn btn-sm", "账单");
+    foot.push(proxyBtn);
+    var billing = el("button", "btn", "账单");
     billing.type = "button";
     billing.addEventListener("click", function () {
       showBilling(c);
     });
-    actions.appendChild(billing);
-
-    var del = el("button", "btn btn-sm btn-danger", "删除");
+    foot.push(billing);
+    var del = el("button", "btn btn-danger", "删除");
     del.type = "button";
     del.addEventListener("click", function () {
-      if (!confirm("确认删除凭证 " + (c.name || c.id) + " ?")) return;
-      del.disabled = true;
-      api("DELETE", "/admin/credentials/" + encodeURIComponent(c.id))
-        .then(function () {
-          toast("已删除", "ok");
-          loadCredentials();
-        })
-        .catch(function (err) {
-          toast("删除失败: " + err.message, "err");
-        })
-        .finally(function () {
-          del.disabled = false;
-        });
+      deleteCredential(c);
     });
-    actions.appendChild(del);
+    foot.push(del);
 
-    card.appendChild(actions);
-    return card;
+    openDrawer("凭证详情", body, foot);
+  }
+
+  function toggleCredential(c) {
+    api("POST", "/admin/credentials/" + encodeURIComponent(c.id) + "/disable", { enabled: !c.enabled })
+      .then(function (updated) {
+        toast(c.enabled ? "已禁用" : "已启用", "ok");
+        if (updated && updated.id) upsertCredentialLocal(updated);
+        else {
+          c.enabled = !c.enabled;
+          upsertCredentialLocal(c);
+        }
+        applyCredFiltersAndRender();
+        if (state.selectedCredId === c.id) openCredentialDetail(c.id);
+      })
+      .catch(function (err) {
+        toast("切换失败: " + err.message, "err");
+      });
+  }
+
+  function refreshCredential(c) {
+    api("POST", "/admin/credentials/" + encodeURIComponent(c.id) + "/refresh")
+      .then(function (updated) {
+        toast("令牌已刷新", "ok");
+        if (updated && updated.id) upsertCredentialLocal(updated);
+        applyCredFiltersAndRender();
+        if (state.selectedCredId === c.id) openCredentialDetail(c.id);
+      })
+      .catch(function (err) {
+        toast("刷新令牌失败: " + err.message, "err");
+      });
+  }
+
+  function deleteCredential(c) {
+    if (!confirm("确认删除凭证 " + (c.name || c.id) + " ？此操作不可撤销。")) return;
+    api("DELETE", "/admin/credentials/" + encodeURIComponent(c.id))
+      .then(function () {
+        toast("已删除", "ok");
+        removeCredentialLocal(c.id);
+        if (state.selectedCredId === c.id) closeDrawer();
+        applyCredFiltersAndRender();
+      })
+      .catch(function (err) {
+        toast("删除失败: " + err.message, "err");
+      });
   }
 
   function showCredentialProxy(c) {
     var body = el("div", "stack");
-    var modeField = el("label", "field");
-    modeField.appendChild(el("span", "label", "代理模式"));
+    body.appendChild(el("p", "muted", "现有代理密码不会回显；切换为自定义 URL 时需重新完整输入。"));
     var mode = el("select");
     [
       ["inherit", "继承全局"],
-      ["direct", "强制直连"],
-      ["url", "自定义代理 URL"],
-    ].forEach(function (value) {
-      var option = el("option", "", value[1]);
-      option.value = value[0];
-      option.selected = (c.proxy_mode || "inherit") === value[0];
-      mode.appendChild(option);
+      ["direct", "直连"],
+      ["url", "自定义 URL"],
+    ].forEach(function (opt) {
+      var o = el("option", "", opt[1]);
+      o.value = opt[0];
+      o.selected = (c.proxy_mode || "inherit") === opt[0];
+      mode.appendChild(o);
     });
+    var modeField = el("label", "field");
+    modeField.appendChild(el("span", "label", "代理模式"));
     modeField.appendChild(mode);
     body.appendChild(modeField);
-    var urlField = el("label", "field");
-    urlField.appendChild(el("span", "label", "代理 URL"));
+
     var proxyURL = el("input");
     proxyURL.type = "password";
     proxyURL.placeholder = "http://user:pass@host:port 或 socks5h://host:port";
+    proxyURL.disabled = mode.value !== "url";
+    var urlField = el("label", "field");
+    urlField.appendChild(el("span", "label", "代理 URL"));
     urlField.appendChild(proxyURL);
     body.appendChild(urlField);
-    body.appendChild(el("p", "muted", "现有代理密码不会回显；切换为自定义 URL 时需重新完整输入。"));
-    function sync() {
+    mode.addEventListener("change", function () {
       proxyURL.disabled = mode.value !== "url";
-    }
-    mode.addEventListener("change", sync);
-    sync();
+    });
 
     var cancel = el("button", "btn", "取消");
     cancel.type = "button";
@@ -533,11 +1100,12 @@
         mode: mode.value,
         url: (proxyURL.value || "").trim(),
       })
-        .then(function () {
-          proxyURL.value = "";
+        .then(function (updated) {
           toast("凭证代理已更新", "ok");
           closeModal();
-          loadCredentials();
+          if (updated && updated.id) upsertCredentialLocal(updated);
+          applyCredFiltersAndRender();
+          if (state.selectedCredId === c.id) openCredentialDetail(c.id);
         })
         .catch(function (err) {
           toast("代理设置失败: " + err.message, "err");
@@ -546,38 +1114,23 @@
           save.disabled = false;
         });
     });
-    openModal("凭证代理 · " + (c.name || c.email || shortId(c.id)), body, [cancel, save]);
-  }
-
-  function lineMeta(label, value) {
-    var row = el("div");
-    row.appendChild(el("strong", "", label + ": "));
-    row.appendChild(el("code", "", value));
-    return row;
+    openModal("凭证代理", body, [cancel, save]);
   }
 
   function showBilling(c) {
     var body = el("div", "stack");
     body.appendChild(el("p", "muted", "加载账单…"));
-    var closeBtn = el("button", "btn", "关闭");
-    closeBtn.type = "button";
-    closeBtn.addEventListener("click", closeModal);
     var reloadBtn = el("button", "btn btn-primary", "刷新");
     reloadBtn.type = "button";
-    openModal("账单 · " + (c.name || c.email || shortId(c.id)), body, [
-      reloadBtn,
-      closeBtn,
-    ]);
-
     function load() {
       clear(body);
       body.appendChild(el("p", "muted", "加载账单…"));
       reloadBtn.disabled = true;
       api("GET", "/admin/credentials/" + encodeURIComponent(c.id) + "/billing")
         .then(function (snap) {
+          state.billingCache[c.id] = { at: Date.now(), snap: snap };
           clear(body);
           body.appendChild(renderBillingDashboard(snap));
-          // Raw JSON is optional debug only — collapsed by default.
           var details = el("details", "raw-details");
           var summary = el("summary", "", "调试：原始 JSON（默认折叠）");
           details.appendChild(summary);
@@ -595,30 +1148,67 @@
         });
     }
     reloadBtn.addEventListener("click", load);
+    openModal("账单 · " + (c.name || shortId(c.id)), body, [reloadBtn]);
     load();
   }
 
-  function fillCredentialUsage(box, credId) {
+  // fillCredentialUsage is only called from detail view (on demand), never list render.
+  function fillCredentialUsage(box, credId, force) {
     if (!box || !credId) return;
-    api("GET", "/admin/credentials/" + encodeURIComponent(credId) + "/billing")
-      .then(function (snap) {
-        clear(box);
-        var build = (snap && snap.grok_build) || {};
-        if (!build.reported || build.shared_weekly_usage_percent == null) {
-          box.appendChild(usageBar("Grok Build", 0, "未报告", "neutral"));
-          return;
-        }
-        var pct = num(build.shared_weekly_usage_percent);
-        var label = "共享周额度已用 " + pct.toFixed(1) + "%";
-        if (build.grok_build_contribution_percent != null) {
-          label += " · Build 贡献 " + num(build.grok_build_contribution_percent).toFixed(1) + "%";
-        }
-        box.appendChild(usageBar("Grok Build", pct, label, toneFromPct(pct)));
-      })
-      .catch(function (err) {
+    var cached = state.billingCache[credId];
+    if (!force && cached && Date.now() - cached.at < 60000) {
+      paintUsageBox(box, cached.snap);
+      return;
+    }
+    clear(box);
+    box.appendChild(el("div", "muted", "额度加载中…"));
+    enqueueBilling(credId, function (err, snap) {
+      if (err) {
         clear(box);
         box.appendChild(el("div", "error", "额度: " + (err.message || "失败")));
-      });
+        return;
+      }
+      paintUsageBox(box, snap);
+    });
+  }
+
+  function enqueueBilling(credId, cb) {
+    state.billingQueue.push({ id: credId, cb: cb });
+    drainBillingQueue();
+  }
+
+  function drainBillingQueue() {
+    while (state.billingActive < BILLING_CONCURRENCY && state.billingQueue.length) {
+      var job = state.billingQueue.shift();
+      state.billingActive++;
+      api("GET", "/admin/credentials/" + encodeURIComponent(job.id) + "/billing")
+        .then(function (snap) {
+          state.billingCache[job.id] = { at: Date.now(), snap: snap };
+          job.cb(null, snap);
+        })
+        .catch(function (err) {
+          job.cb(err);
+        })
+        .finally(function () {
+          state.billingActive--;
+          drainBillingQueue();
+        });
+    }
+  }
+
+  function paintUsageBox(box, snap) {
+    clear(box);
+    var build = (snap && snap.grok_build) || {};
+    if (!build.reported || build.shared_weekly_usage_percent == null) {
+      box.appendChild(usageBar("Grok Build", 0, "未报告", "neutral"));
+      return;
+    }
+    var pct = num(build.shared_weekly_usage_percent);
+    var label = "共享周额度已用 " + pct.toFixed(1) + "%";
+    if (build.grok_build_contribution_percent != null) {
+      label += " · Build 贡献 " + num(build.grok_build_contribution_percent).toFixed(1) + "%";
+    }
+    box.appendChild(usageBar("Grok Build", pct, label, toneFromPct(pct)));
   }
 
   function parseUsage(snap) {
@@ -637,185 +1227,98 @@
       weekPct: weekPct,
       monthLabel:
         limit != null && limit > 0 && used != null
-          ? fmtNum(used) + " / " + fmtNum(limit) + "（剩 " + fmtNum(rem) + "）"
+          ? fmtNum(used) + " / " + fmtNum(limit)
           : used != null
-            ? "已用 " + fmtNum(used) + "（无限额字段）"
+            ? fmtNum(used)
             : "未报告",
-      weekLabel: weekPct != null ? weekPct.toFixed(1) + "%" : "未报告",
-      monthTone: monthPct != null ? toneFromPct(monthPct) : "neutral",
-      weekTone: weekPct != null ? toneFromPct(weekPct) : "neutral",
-      period:
-        (m.billingPeriodStart || "") && (m.billingPeriodEnd || "")
-          ? fmtDay(m.billingPeriodStart) + " → " + fmtDay(m.billingPeriodEnd)
-          : m.billingPeriodEnd
-            ? "至 " + fmtDay(m.billingPeriodEnd)
-            : "",
-      weekEnd: w.billingPeriodEnd ? fmtDay(w.billingPeriodEnd) : "",
-      products: parseProductUsage(w.productUsage),
     };
   }
 
-  function parseProductUsage(raw) {
-    if (!raw) return [];
-    try {
-      var arr = typeof raw === "string" ? JSON.parse(raw) : raw;
-      if (!Array.isArray(arr)) return [];
-      return arr
-        .map(function (p) {
-          return {
-            name: p.product || p.name || "?",
-            pct: optionalNum(p.usagePercent != null ? p.usagePercent : p.usage_percent),
-          };
-        })
-        .filter(function (p) {
-          return p.name;
-        });
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function renderBillingDashboard(snap) {
-    var u = parseUsage(snap);
-    var build = (snap && snap.grok_build) || {};
-    var wrap = el("div", "stack billing-dash");
-
-    var hero = el("div", "billing-hero");
-    hero.appendChild(el("div", "billing-hero-title", "Grok Build 额度"));
-    hero.appendChild(
-      el(
-        "div",
-        "billing-hero-value",
-        build.reported && build.shared_weekly_usage_percent != null
-          ? num(build.shared_weekly_usage_percent).toFixed(1) + "% 已用"
-          : "未报告"
-      )
-    );
-    hero.appendChild(
-      el(
-        "div",
-        "muted",
-        build.grok_build_contribution_percent != null
-          ? "Grok Build 对共享周额度池的消耗贡献 " + num(build.grok_build_contribution_percent).toFixed(1) + "%（不是独立上限）"
-          : "共享周额度；上游未单独报告 Grok Build 消耗贡献"
-      )
-    );
-    wrap.appendChild(hero);
-
-    if (build.reported && build.shared_weekly_usage_percent != null) {
-      wrap.appendChild(usageBar("共享周额度", num(build.shared_weekly_usage_percent), num(build.shared_weekly_usage_percent).toFixed(1) + "%", toneFromPct(num(build.shared_weekly_usage_percent))));
-    }
-
-    var diagnostics = el("details", "raw-details");
-    diagnostics.appendChild(el("summary", "", "诊断：月度/API 与产品明细"));
-    var grid = el("div", "billing-grid");
-    grid.appendChild(statCard("月已用", u.used != null ? fmtNum(u.used) : "未报告"));
-    grid.appendChild(statCard("月上限", u.limit != null ? fmtNum(u.limit) : "未报告"));
-    grid.appendChild(statCard("月剩余", u.rem != null ? fmtNum(u.rem) : "未报告"));
-    grid.appendChild(statCard("周用量", u.weekPct != null ? u.weekPct.toFixed(1) + "%" : "未报告"));
-    diagnostics.appendChild(grid);
-
-    if (u.period) {
-      diagnostics.appendChild(lineMeta("月账期", u.period));
-    }
-    if (u.weekEnd) {
-      diagnostics.appendChild(lineMeta("周账期结束", u.weekEnd));
-    }
-
-    if (u.products.length) {
-      diagnostics.appendChild(el("div", "section-label", "产品用量"));
-      u.products.forEach(function (p) {
-        diagnostics.appendChild(
-          usageBar(
-            p.name,
-            p.pct != null ? p.pct : 0,
-            p.pct != null ? p.pct.toFixed(1) + "%" : "未报告",
-            p.pct != null ? toneFromPct(p.pct) : "neutral"
-          )
-        );
-      });
-    }
-	if (snap && snap.monthly_error) diagnostics.appendChild(el("p", "error", "月度接口: " + snap.monthly_error));
-	if (snap && snap.weekly_error) diagnostics.appendChild(el("p", "error", "周额度接口: " + snap.weekly_error));
-	wrap.appendChild(diagnostics);
-
-    if (!build.reported) {
-      wrap.appendChild(
-        el("p", "muted", "Grok Build 共享周额度：未报告。月度/API 数据仍可在诊断区查看。")
-      );
-    } else if (num(build.shared_weekly_usage_percent) >= 100) {
-      wrap.appendChild(
-        el("p", "error", "周额度已用尽（上游可能返回 402 账单错误）。")
-      );
-    } else if (u.monthPct != null && u.monthPct >= 95) {
-      wrap.appendChild(el("p", "error", "月额度即将用尽，请留意切换账号。"));
-    }
-
-    return wrap;
-  }
-
-  function usageBar(label, pct, detail, tone) {
-    var box = el("div", "usage-bar-wrap");
-    var head = el("div", "usage-bar-head");
-    head.appendChild(el("span", "", label));
-    head.appendChild(el("span", "muted", detail || ""));
-    box.appendChild(head);
-    var track = el("div", "usage-track");
-    var fill = el("div", "usage-fill " + (tone || "tone-ok"));
-    var width = Math.max(0, Math.min(100, Number(pct) || 0));
-    fill.style.width = width.toFixed(1) + "%";
-    track.appendChild(fill);
-    box.appendChild(track);
-    return box;
-  }
-
-  function statCard(label, value) {
-    var card = el("div", "stat-card");
-    card.appendChild(el("div", "muted", label));
-    card.appendChild(el("div", "stat-value", value));
-    return card;
-  }
-
-  function num(v) {
-    var n = Number(v);
-    return isFinite(n) ? n : 0;
-  }
-
-  function optionalNum(v) {
-    if (v == null || v === "") return null;
-    var n = Number(v);
-    return isFinite(n) ? n : null;
-  }
-
   function fmtNum(n) {
-    n = num(n);
-    try {
-      return n.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
-    } catch (_) {
-      return String(n);
-    }
-  }
-
-  function fmtDay(iso) {
-    if (!iso) return "";
-    // Keep date part readable without forcing timezone conversion surprises.
-    var s = String(iso);
-    if (s.length >= 10) return s.slice(0, 10);
-    return s;
+    if (n == null) return "—";
+    return String(n);
   }
 
   function toneFromPct(pct) {
-    pct = num(pct);
-    if (pct >= 95) return "tone-danger";
-    if (pct >= 70) return "tone-warn";
-    return "tone-ok";
+    if (pct >= 90) return "danger";
+    if (pct >= 70) return "warn";
+    return "ok";
   }
 
+  function usageBar(title, pct, label, tone) {
+    var wrap = el("div", "usage-item");
+    wrap.appendChild(el("div", "usage-title", title));
+    var track = el("div", "usage-track");
+    var fill = el("div", "usage-fill tone-" + (tone || "ok"));
+    fill.style.width = Math.max(0, Math.min(100, pct || 0)) + "%";
+    track.appendChild(fill);
+    wrap.appendChild(track);
+    wrap.appendChild(el("div", "muted small", label || ""));
+    return wrap;
+  }
+
+  function renderBillingDashboard(snap) {
+    var wrap = el("div", "stack");
+    var u = parseUsage(snap);
+    var grid = el("div", "billing-grid");
+    grid.appendChild(statMini("月度已用", u.used != null ? fmtNum(u.used) : "未报告"));
+    grid.appendChild(statMini("月度上限", u.limit != null ? fmtNum(u.limit) : "未报告"));
+    grid.appendChild(statMini("月度占比", u.monthPct != null ? u.monthPct.toFixed(1) + "%" : "未报告"));
+    grid.appendChild(
+      statMini("周额度", u.weekPct != null ? u.weekPct.toFixed(1) + "%" : "未报告")
+    );
+    wrap.appendChild(grid);
+
+    var build = (snap && snap.grok_build) || {};
+    if (build.reported) {
+      wrap.appendChild(
+        usageBar(
+          "Grok Build 共享周额度",
+          num(build.shared_weekly_usage_percent),
+          "已用 " +
+            (build.shared_weekly_usage_percent != null
+              ? num(build.shared_weekly_usage_percent).toFixed(1) + "%"
+              : "未报告"),
+          toneFromPct(num(build.shared_weekly_usage_percent))
+        )
+      );
+    }
+
+    if (snap && snap.products && snap.products.length) {
+      var prod = el("div", "stack");
+      prod.appendChild(el("h4", "", "产品"));
+      snap.products.forEach(function (p) {
+        prod.appendChild(el("div", "muted small", JSON.stringify(p)));
+      });
+      wrap.appendChild(prod);
+    }
+
+    var diagnostics = el("div", "stack");
+    if (snap && snap.monthly_error) diagnostics.appendChild(el("p", "error", "月度接口: " + snap.monthly_error));
+    if (snap && snap.weekly_error) diagnostics.appendChild(el("p", "error", "周额度接口: " + snap.weekly_error));
+    if (diagnostics.childNodes.length) wrap.appendChild(diagnostics);
+
+    if (u.weekPct != null && u.weekPct >= 100) {
+      wrap.appendChild(el("p", "error", "周额度已用尽（上游可能返回 402 账单错误）。"));
+    } else if (u.monthPct != null && u.monthPct >= 95) {
+      wrap.appendChild(el("p", "error", "月额度即将用尽，请留意切换账号。"));
+    }
+    return wrap;
+  }
+
+  function statMini(k, v) {
+    var d = el("div", "stat-mini");
+    d.appendChild(el("div", "muted small", k));
+    d.appendChild(el("div", "stat-mini-v", v));
+    return d;
+  }
+
+  // ---------- Import / device ----------
+
   function importDefaultGrok() {
-    // POST /admin/credentials/import-grok with empty/{} body → default ~/.grok path
     api("POST", "/admin/credentials/import-grok", {})
       .then(function (data) {
-        var n = (data && data.imported) || 0;
+        var n = (data && (data.imported || data.created + data.updated)) || 0;
         toast("已导入 " + n + " 条凭证", "ok");
         loadCredentials();
       })
@@ -828,44 +1331,47 @@
     api("POST", "/admin/oauth/device/start", {})
       .then(function (data) {
         var body = el("div", "stack");
-        body.appendChild(el("p", "muted", "在 xAI 页面完成授权，此窗口会自动检测结果。"));
-        var code = el("code", "code-block", data.user_code || "");
-        body.appendChild(code);
-        var link = el("a", "btn btn-primary", "打开授权页面");
-        link.href = data.verification_uri_complete || data.verification_uri || "#";
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        body.appendChild(link);
+        body.appendChild(el("p", "", "请在浏览器中完成 xAI 授权。"));
+        if (data.user_code) body.appendChild(el("div", "plaintext-box", data.user_code));
+        if (data.verification_uri_complete || data.verification_uri) {
+          var link = el("a", "btn btn-primary", "打开授权页面");
+          link.href = data.verification_uri_complete || data.verification_uri;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          body.appendChild(link);
+        }
         var status = el("p", "muted", "等待授权…");
-        status.id = "device-login-status";
         body.appendChild(status);
-        var cancel = el("button", "btn", "取消");
-        cancel.type = "button";
-        cancel.addEventListener("click", closeModal);
-        openModal("浏览器登录", body, [cancel]);
+        var close = el("button", "btn", "关闭");
+        close.type = "button";
+        close.addEventListener("click", closeModal);
+        openModal("浏览器登录", body, [close]);
 
-        var interval = Math.max(1, Number(data.interval) || 5) * 1000;
+        var interval = Math.max(2, num(data.interval) || 5) * 1000;
         function poll() {
-          if (!$("device-login-status")) return;
           api("POST", "/admin/oauth/device/poll", { session_id: data.session_id })
-            .then(function (result) {
-              if (result && result.status === "authorized") {
+            .then(function (res) {
+              if (res && res.status === "complete") {
+                setText(status, "授权成功");
                 toast("账号授权成功", "ok");
                 closeModal();
                 loadCredentials();
                 return;
               }
-              setText($("device-login-status"), "等待授权…");
-              var delay = Math.max(1, Number(result && result.retry_after) || interval / 1000) * 1000;
-              setTimeout(poll, delay);
-            })
-            .catch(function (err) {
-              if (err.status === 429) {
-                var retry = Number(err.data && err.data.retry_after) || interval / 1000;
+              if (res && res.status === "pending") {
+                var delay = Math.max(1, num(res.interval) || interval / 1000) * 1000;
+                setTimeout(poll, delay);
+                return;
+              }
+              if (res && res.status === "slow_down") {
+                var retry = num(res.interval) || 5;
                 setTimeout(poll, Math.max(1, retry) * 1000);
                 return;
               }
-              setText($("device-login-status"), "授权失败: " + err.message);
+              setText(status, (res && res.error) || "授权未完成");
+            })
+            .catch(function (err) {
+              setText(status, err.message || "轮询失败");
             });
         }
         setTimeout(poll, interval);
@@ -877,42 +1383,16 @@
 
   function openImportRawModal() {
     var body = el("div", "stack");
-    body.appendChild(
-      el(
-        "p",
-        "muted",
-        "上传多个 Grok / CPA JSON 或 SSO 文件，也可直接粘贴内容。原始文本会直接发送，重复 JSON 顶层名称不会在浏览器中被覆盖。"
-      )
-    );
-    var formatField = el("label", "field");
-    formatField.appendChild(el("span", "label", "内容类型"));
-    var format = el("select");
-    [
-      ["auto", "自动识别"],
-      ["json", "Grok / CPA JSON"],
-      ["sso", "SSO 文本 / JSON"],
-    ].forEach(function (option) {
-      var node = el("option", "", option[1]);
-      node.value = option[0];
-      format.appendChild(node);
-    });
-    formatField.appendChild(format);
-    body.appendChild(formatField);
-
-    var fileField = el("label", "field");
-    fileField.appendChild(el("span", "label", "选择文件（可多选）"));
+    body.appendChild(el("p", "muted", "支持 Grok/CPA JSON 与 SSO 文本；可多文件或粘贴。"));
     var fileInput = el("input");
     fileInput.type = "file";
     fileInput.multiple = true;
-    fileInput.accept = ".json,.txt,.sso,application/json,text/plain";
-    fileField.appendChild(fileInput);
-    body.appendChild(fileField);
-
-    body.appendChild(el("div", "muted", "或粘贴内容"));
+    body.appendChild(fileInput);
     var ta = el("textarea");
-    ta.placeholder = "auth.json / CPA xAI JSON / 每行一个 SSO";
+    ta.rows = 8;
+    ta.placeholder = "或在此粘贴 JSON / SSO 文本";
     body.appendChild(ta);
-    var status = el("div", "muted");
+    var status = el("p", "muted", "");
     body.appendChild(status);
     var importDetails = el("pre", "code");
     importDetails.style.display = "none";
@@ -921,79 +1401,64 @@
     var cancel = el("button", "btn", "取消");
     cancel.type = "button";
     cancel.addEventListener("click", closeModal);
-
     var ok = el("button", "btn btn-primary", "导入");
     ok.type = "button";
     ok.addEventListener("click", function () {
-      var rawText = (ta.value || "").trim();
-      var selected = fileInput.files || [];
-      if (!rawText && !selected.length) {
+      var files = fileInput.files;
+      var raw = (ta.value || "").trim();
+      if ((!files || !files.length) && !raw) {
         toast("请选择文件或粘贴内容", "err");
         return;
       }
       ok.disabled = true;
-      setText(status, "正在创建导入任务…");
-      var request;
-      if (selected.length) {
-        var form = new FormData();
-        form.append("format", format.value || "auto");
-        for (var i = 0; i < selected.length; i++) form.append("files", selected[i], selected[i].name);
-        if (rawText) {
-          form.append("files", new Blob([rawText], { type: "text/plain" }), "pasted.txt");
-        }
-        request = apiForm("POST", "/admin/import-jobs", form);
-      } else {
-        request = api("POST", "/admin/import-jobs", {
-          name: format.value === "json" ? "pasted.json" : "pasted.txt",
-          format: format.value || "auto",
-          text: rawText,
-        });
+      setText(status, "上传中…");
+      var form = new FormData();
+      if (files && files.length) {
+        for (var i = 0; i < files.length; i++) form.append("files", files[i]);
       }
-      request
+      if (raw) form.append("raw", raw);
+      apiForm("POST", "/admin/credential-imports", form)
         .then(function (job) {
-          setText(status, "任务已创建，正在解析与写入…");
-          return pollImportJob(job.id, status, importDetails);
+          if (job && job.id && job.status && job.status !== "completed" && job.status !== "partial" && job.status !== "failed") {
+            setText(status, "任务已提交，处理中…");
+            return pollImportJob(job.id, status, importDetails);
+          }
+          return job;
         })
         .then(function (job) {
-          var imported = num(job.created) + num(job.updated);
+          if (!job) return;
           var message =
-            "导入完成：" + imported + " 条（新增 " + num(job.created) + "，更新 " + num(job.updated) +
-            "，跳过 " + num(job.skipped) + "）";
-          if (job.failed) message += "，失败 " + job.failed;
-          if (job.warning_count) message += "，警告 " + job.warning_count;
+            "导入完成：新建 " +
+            num(job.created) +
+            " · 更新 " +
+            num(job.updated) +
+            " · 失败 " +
+            num(job.failed);
+          setText(status, message);
+          renderImportJobDetails(job, importDetails);
           toast(message, job.failed ? "err" : "ok");
-          ta.value = "";
-          fileInput.value = "";
           loadCredentials();
         })
         .catch(function (err) {
-          toast("导入失败: " + err.message, "err");
           setText(status, "导入失败: " + err.message);
+          toast("导入失败: " + err.message, "err");
         })
         .finally(function () {
           ok.disabled = false;
         });
     });
-
-    openModal("批量导入凭证", body, [cancel, ok]);
+    openModal("批量导入", body, [cancel, ok]);
   }
 
   function pollImportJob(id, statusNode, detailsNode) {
     return new Promise(function (resolve, reject) {
       function poll() {
-        api("GET", "/admin/import-jobs/" + encodeURIComponent(id))
+        api("GET", "/admin/credential-imports/" + encodeURIComponent(id))
           .then(function (job) {
-            setText(
-              statusNode,
-              "状态：" + (job.status || "unknown") +
-                " · 文件 " + num(job.files_processed) + "/" + num(job.files_total) +
-                " · 条目 " + num(job.processed) + "/" + num(job.total) +
-                " · 新增 " + num(job.created) +
-                " · 更新 " + num(job.updated) +
-                " · 跳过 " + num(job.skipped) +
-                " · 失败 " + num(job.failed)
-            );
-            renderImportJobDetails(job, detailsNode);
+            if (!job) {
+              reject(new Error("任务不存在"));
+              return;
+            }
             if (job.status === "completed" || job.status === "partial" || job.status === "failed") {
               if (job.status === "failed" && !job.created && !job.updated) {
                 var detail = job.error || ((job.results || [])[0] || {}).error || "导入任务失败";
@@ -1003,11 +1468,15 @@
               resolve(job);
               return;
             }
+            setText(statusNode, "处理中… " + (job.status || ""));
             setTimeout(poll, 500);
           })
           .catch(reject);
       }
       poll();
+    }).then(function (job) {
+      renderImportJobDetails(job, detailsNode);
+      return job;
     });
   }
 
@@ -1015,15 +1484,12 @@
     if (!node) return;
     var lines = [];
     (job.files || []).forEach(function (file) {
-      lines.push(
-        (file.source || "file") + " · " + (file.name || "未命名") + " · " + (file.status || "unknown") +
-          " · " + num(file.processed) + "/" + num(file.total)
-      );
+      lines.push("文件 " + (file.name || "?") + " · " + (file.status || ""));
       (file.warnings || []).forEach(function (warning) {
         lines.push("  警告 [" + (warning.field || "unknown") + "] " + (warning.message || ""));
       });
       (file.results || []).forEach(function (result) {
-        var line = "  " + (result.source || "entry") + " · " + (result.status || "unknown");
+        var line = "  " + (result.source || result.source_key || "") + " · " + (result.status || "");
         if (result.error) line += " · " + result.error;
         lines.push(line);
         (result.warnings || []).forEach(function (warning) {
@@ -1037,30 +1503,36 @@
 
   // ---------- Clients ----------
 
+  function setClientPanel(mode) {
+    show($("client-loading"), mode === "loading");
+    show($("client-error"), mode === "error");
+    show($("client-empty"), mode === "empty");
+    show($("client-list"), mode === "table");
+  }
+
   function loadClients() {
-    var wrap = $("client-list");
-    var empty = $("client-empty");
-    if (!wrap) return;
-    clear(wrap);
-    show(empty, false);
-    show(wrap, true);
+    setClientPanel("loading");
     api("GET", "/admin/clients")
       .then(function (data) {
         var clients = (data && data.clients) || [];
+        state.clients = clients;
         if (!clients.length) {
-          show(empty, true);
-          show(wrap, false);
+          setClientPanel("empty");
           return;
         }
+        setClientPanel("table");
+        var wrap = $("client-list");
+        clear(wrap);
         wrap.appendChild(renderClientTable(clients));
       })
       .catch(function (err) {
-        toast("加载客户端失败: " + err.message, "err");
+        setClientPanel("error");
+        setText($("client-error-msg"), err.message || "加载失败");
       });
   }
 
   function renderClientTable(clients) {
-    var table = el("table");
+    var table = el("table", "data-table");
     var thead = el("thead");
     var hr = el("tr");
     ["名称", "编号", "前缀", "创建时间", "状态", ""].forEach(function (h) {
@@ -1082,19 +1554,21 @@
       tr.appendChild(el("td", "", fmtTime(c.created_at)));
       var st = el("td");
       st.appendChild(
-        el(
-          "span",
-          "badge " + (c.disabled ? "badge-off" : "badge-ok"),
-          c.disabled ? "已停用" : "可用"
-        )
+        el("span", "badge " + (c.disabled ? "badge-off" : "badge-ok"), c.disabled ? "已停用" : "可用")
       );
       tr.appendChild(st);
 
-      var act = el("td");
+      var act = el("td", "col-actions");
+      var copyCfg = el("button", "btn btn-sm", "复制配置");
+      copyCfg.type = "button";
+      copyCfg.addEventListener("click", function () {
+        copyClientConfig(c);
+      });
+      act.appendChild(copyCfg);
       var del = el("button", "btn btn-sm btn-danger", "删除");
       del.type = "button";
       del.addEventListener("click", function () {
-        if (!confirm("确认吊销客户端密钥 " + (c.name || c.id) + " ？")) return;
+        if (!confirm("确认吊销客户端密钥 " + (c.name || c.id) + " ？下游将无法鉴权。")) return;
         del.disabled = true;
         api("DELETE", "/admin/clients/" + encodeURIComponent(c.id))
           .then(function () {
@@ -1114,6 +1588,12 @@
     });
     table.appendChild(tbody);
     return table;
+  }
+
+  function copyClientConfig(c) {
+    // Without plaintext we can only copy placeholder-based snippets.
+    renderIntegration();
+    copyIntegration();
   }
 
   function openCreateClientModal() {
@@ -1154,18 +1634,22 @@
   function showOncePlaintext(plain, client) {
     var body = el("div", "stack");
     body.appendChild(
-      el(
-        "div",
-        "warn-note",
-        "明文 API Key 仅此一次展示，关闭后无法再次查看。请立即复制保存。"
-      )
+      el("div", "warn-note", "明文 API Key 仅此一次展示，关闭后无法再次查看。请立即复制保存。")
     );
-    if (client && client.name) {
-      body.appendChild(el("div", "muted", "名称: " + client.name));
-    }
+    if (client && client.name) body.appendChild(el("div", "muted", "名称: " + client.name));
     body.appendChild(el("div", "plaintext-box", plain || "（空）"));
 
-    var copy = el("button", "btn btn-primary", "复制");
+    var origin = location.origin || "http://127.0.0.1:8080";
+    var anthropic =
+      'export ANTHROPIC_BASE_URL="' + origin + '"\n' + 'export ANTHROPIC_AUTH_TOKEN="' + plain + '"';
+    var openai =
+      'export OPENAI_BASE_URL="' + origin + '/v1"\n' + 'export OPENAI_API_KEY="' + plain + '"';
+    body.appendChild(el("span", "label", "Claude Code 配置"));
+    body.appendChild(el("pre", "code", anthropic));
+    body.appendChild(el("span", "label", "OpenAI 配置"));
+    body.appendChild(el("pre", "code", openai));
+
+    var copy = el("button", "btn btn-primary", "复制密钥");
     copy.type = "button";
     copy.addEventListener("click", function () {
       copyText(plain).then(
@@ -1177,10 +1661,22 @@
         }
       );
     });
+    var copyAll = el("button", "btn", "复制完整配置");
+    copyAll.type = "button";
+    copyAll.addEventListener("click", function () {
+      copyText(anthropic + "\n\n" + openai).then(
+        function () {
+          toast("已复制配置", "ok");
+        },
+        function () {
+          toast("复制失败", "err");
+        }
+      );
+    });
     var close = el("button", "btn", "我已保存");
     close.type = "button";
     close.addEventListener("click", closeModal);
-    openModal("客户端密钥", body, [copy, close]);
+    openModal("客户端密钥", body, [copy, copyAll, close]);
   }
 
   // ---------- Runtime settings ----------
@@ -1198,7 +1694,14 @@
       })
       .catch(function (err) {
         clear(host);
-        host.appendChild(el("p", "error", "设置加载失败: " + err.message));
+        var panel = el("div", "error-panel");
+        panel.appendChild(el("h3", "", "设置加载失败"));
+        panel.appendChild(el("p", "muted", err.message || "未知错误"));
+        var retry = el("button", "btn btn-primary", "重试");
+        retry.type = "button";
+        retry.addEventListener("click", loadSettings);
+        panel.appendChild(retry);
+        host.appendChild(panel);
       });
   }
 
@@ -1253,11 +1756,7 @@
       wrap.appendChild(item.field);
     });
     wrap.appendChild(
-      el(
-        "p",
-        "muted",
-        converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key"
-      )
+      el("p", "muted", converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key")
     );
 
     wrap.appendChild(el("h3", "", "凭证自动巡检"));
@@ -1282,24 +1781,25 @@
     ].forEach(function (item) {
       wrap.appendChild(item.field);
     });
-    wrap.appendChild(el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。"));
+    wrap.appendChild(el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。"));
     var inspectionStatus = el("p", "muted", "巡检状态加载中…");
     wrap.appendChild(inspectionStatus);
     api("GET", "/admin/inspection")
       .then(function (data) {
-        if (data.running) {
-          setText(inspectionStatus, "巡检正在运行");
-        } else if (data.has_run && data.last) {
+        if (data.running) setText(inspectionStatus, "巡检正在运行");
+        else if (data.has_run && data.last) {
           setText(
             inspectionStatus,
-            "上次巡检：" + fmtTime(data.last.finished_at) +
-              " · 正常 " + num(data.last.healthy) +
-              " · 隔离 " + num(data.last.quarantined) +
-              " · 429 " + num(data.last.rate_limited)
+            "上次巡检：" +
+              fmtTime(data.last.finished_at) +
+              " · 正常 " +
+              num(data.last.healthy) +
+              " · 隔离 " +
+              num(data.last.quarantined) +
+              " · 429 " +
+              num(data.last.rate_limited)
           );
-        } else {
-          setText(inspectionStatus, "尚未执行巡检");
-        }
+        } else setText(inspectionStatus, "尚未执行巡检");
       })
       .catch(function () {
         setText(inspectionStatus, "巡检状态不可用");
@@ -1307,31 +1807,16 @@
     var runInspection = el("button", "btn", "立即巡检");
     runInspection.type = "button";
     runInspection.addEventListener("click", function () {
-      runInspection.disabled = true;
-      setText(inspectionStatus, "正在巡检，请稍候…");
-      api("POST", "/admin/inspection/run")
-        .then(function (summary) {
-          setText(
-            inspectionStatus,
-            "巡检完成：正常 " + num(summary.healthy) +
-              " · 隔离 " + num(summary.quarantined) +
-              " · 429 " + num(summary.rate_limited) +
-              (summary.mass_failure_guard ? " · 已触发批量故障保护" : "")
-          );
-          loadCredentials();
-        })
-        .catch(function (err) {
-          setText(inspectionStatus, "巡检失败: " + err.message);
-        })
-        .finally(function () {
-          runInspection.disabled = false;
-        });
+      runInspectionOnce(inspectionStatus, runInspection);
     });
     wrap.appendChild(runInspection);
 
     var save = el("button", "btn btn-primary", "保存运行设置");
     save.type = "button";
     save.addEventListener("click", function () {
+      if (num(inspectPurge.input.value) > 0) {
+        if (!confirm("已设置隔离后自动删除。确认保存该高风险配置？")) return;
+      }
       var payload = {};
       var nextMode = proxyMode.input.value;
       var nextURL = (proxyURL.input.value || "").trim();
@@ -1382,6 +1867,33 @@
     return wrap;
   }
 
+  function runInspectionOnce(statusNode, btn) {
+    if (btn) btn.disabled = true;
+    if (statusNode) setText(statusNode, "正在巡检，请稍候…");
+    return api("POST", "/admin/inspection/run")
+      .then(function (summary) {
+        var msg =
+          "巡检完成：正常 " +
+          num(summary.healthy) +
+          " · 隔离 " +
+          num(summary.quarantined) +
+          " · 429 " +
+          num(summary.rate_limited) +
+          (summary.mass_failure_guard ? " · 已触发批量故障保护" : "");
+        if (statusNode) setText(statusNode, msg);
+        toast("巡检完成", "ok");
+        if (state.route === "credentials") loadCredentials();
+        if (state.route === "overview") loadOverview();
+      })
+      .catch(function (err) {
+        if (statusNode) setText(statusNode, "巡检失败: " + err.message);
+        toast("巡检失败: " + err.message, "err");
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
   function settingInput(label, type, placeholder) {
     var field = el("label", "field");
     field.appendChild(el("span", "label", label));
@@ -1427,12 +1939,20 @@
       .then(function (sys) {
         state.system = sys;
         setText($("shell-version"), (sys && sys.version) || "管理后台");
+        updateTopbarStatus(sys);
         clear(host);
         host.appendChild(renderSystem(sys));
       })
       .catch(function (err) {
         clear(host);
-        host.appendChild(el("p", "error", err.message || "加载失败"));
+        var panel = el("div", "error-panel");
+        panel.appendChild(el("h3", "", "加载失败"));
+        panel.appendChild(el("p", "muted", err.message || "未知错误"));
+        var retry = el("button", "btn btn-primary", "重试");
+        retry.type = "button";
+        retry.addEventListener("click", loadSystem);
+        panel.appendChild(retry);
+        host.appendChild(panel);
       });
   }
 
@@ -1465,7 +1985,11 @@
     if (sys.limits) {
       var lim = sys.limits;
       addKV(dl, "最大请求体", String(lim.MaxBodyBytes != null ? lim.MaxBodyBytes : lim.max_body_bytes || "—"));
-      addKV(dl, "请求超时(秒)", String(lim.RequestTimeoutSec != null ? lim.RequestTimeoutSec : lim.request_timeout_sec || "—"));
+      addKV(
+        dl,
+        "请求超时(秒)",
+        String(lim.RequestTimeoutSec != null ? lim.RequestTimeoutSec : lim.request_timeout_sec || "—")
+      );
       addKV(dl, "最大并发", String(lim.MaxConcurrent != null ? lim.MaxConcurrent : lim.max_concurrent || "—"));
     }
     wrap.appendChild(dl);
@@ -1494,10 +2018,7 @@
       '"\n' +
       'export ANTHROPIC_AUTH_TOKEN="<客户端密钥>"';
     var openai =
-      'export OPENAI_BASE_URL="' +
-      origin +
-      '/v1"\n' +
-      'export OPENAI_API_KEY="<客户端密钥>"';
+      'export OPENAI_BASE_URL="' + origin + '/v1"\n' + 'export OPENAI_API_KEY="<客户端密钥>"';
     setText($("snippet-anthropic"), anthropic);
     setText($("snippet-openai"), openai);
   }
@@ -1505,8 +2026,7 @@
   function copyIntegration() {
     var a = ($("snippet-anthropic") && $("snippet-anthropic").textContent) || "";
     var o = ($("snippet-openai") && $("snippet-openai").textContent) || "";
-    var all = a + "\n\n" + o;
-    copyText(all).then(
+    copyText(a + "\n\n" + o).then(
       function () {
         toast("已复制接入片段", "ok");
       },
@@ -1550,42 +2070,99 @@
     }
 
     var logoutBtn = $("btn-logout");
-    if (logoutBtn) {
-      logoutBtn.addEventListener("click", function () {
-        logout(false);
-      });
-    }
+    if (logoutBtn) logoutBtn.addEventListener("click", function () {
+      logout(false);
+    });
 
     var credRefresh = $("btn-cred-refresh-list");
     if (credRefresh) credRefresh.addEventListener("click", loadCredentials);
 
+    var btnRetry = $("btn-cred-retry");
+    if (btnRetry) btnRetry.addEventListener("click", loadCredentials);
+
+    var btnClearFilter = $("btn-cred-clear-filter");
+    if (btnClearFilter) {
+      btnClearFilter.addEventListener("click", function () {
+        if ($("cred-search")) $("cred-search").value = "";
+        if ($("cred-filter-health")) $("cred-filter-health").value = "all";
+        state.credFilter = { q: "", health: "all", sort: state.credFilter.sort, page: 1 };
+        applyCredFiltersAndRender();
+      });
+    }
+
+    ["cred-search", "cred-filter-health", "cred-sort"].forEach(function (id) {
+      var node = $(id);
+      if (!node) return;
+      var ev = id === "cred-search" ? "input" : "change";
+      node.addEventListener(ev, function () {
+        state.credFilter.page = 1;
+        applyCredFiltersAndRender();
+      });
+    });
+
     var impDef = $("btn-import-default");
     if (impDef) impDef.addEventListener("click", importDefaultGrok);
+    var emptyImp = $("btn-empty-import");
+    if (emptyImp) emptyImp.addEventListener("click", importDefaultGrok);
 
     var deviceLogin = $("btn-device-login");
     if (deviceLogin) deviceLogin.addEventListener("click", startDeviceLogin);
+    var emptyDevice = $("btn-empty-device");
+    if (emptyDevice) emptyDevice.addEventListener("click", startDeviceLogin);
 
     var impRaw = $("btn-import-raw");
     if (impRaw) impRaw.addEventListener("click", openImportRawModal);
 
     var clientRefresh = $("btn-client-refresh");
     if (clientRefresh) clientRefresh.addEventListener("click", loadClients);
-
+    var clientRetry = $("btn-client-retry");
+    if (clientRetry) clientRetry.addEventListener("click", loadClients);
     var clientCreate = $("btn-client-create");
     if (clientCreate) clientCreate.addEventListener("click", openCreateClientModal);
+    var emptyClient = $("btn-empty-client-create");
+    if (emptyClient) emptyClient.addEventListener("click", openCreateClientModal);
 
     var sysRefresh = $("btn-system-refresh");
     if (sysRefresh) sysRefresh.addEventListener("click", loadSystem);
-
     var settingsRefresh = $("btn-settings-refresh");
     if (settingsRefresh) settingsRefresh.addEventListener("click", loadSettings);
-
     var copyInt = $("btn-copy-integration");
     if (copyInt) copyInt.addEventListener("click", copyIntegration);
 
+    var overviewRefresh = $("btn-overview-refresh");
+    if (overviewRefresh) overviewRefresh.addEventListener("click", loadOverview);
+    var overviewAdd = $("btn-overview-add");
+    if (overviewAdd) {
+      overviewAdd.addEventListener("click", function () {
+        navigate("credentials");
+        startDeviceLogin();
+      });
+    }
+    var overviewInspect = $("btn-overview-inspect");
+    if (overviewInspect) {
+      overviewInspect.addEventListener("click", function () {
+        runInspectionOnce(null, overviewInspect);
+      });
+    }
+
+    var crisisView = $("btn-crisis-view");
+    if (crisisView) {
+      crisisView.addEventListener("click", function () {
+        state.credFilter.health = "problem";
+        if ($("cred-filter-health")) $("cred-filter-health").value = "problem";
+        navigate("credentials");
+      });
+    }
+    var crisisDismiss = $("btn-crisis-dismiss");
+    if (crisisDismiss) {
+      crisisDismiss.addEventListener("click", function () {
+        state.crisisDismissed = true;
+        show($("crisis-banner"), false);
+      });
+    }
+
     var modalClose = $("modal-close");
     if (modalClose) modalClose.addEventListener("click", closeModal);
-
     var modal = $("modal");
     if (modal) {
       modal.addEventListener("click", function (e) {
@@ -1593,32 +2170,46 @@
       });
     }
 
+    var drawerClose = $("drawer-close");
+    if (drawerClose) drawerClose.addEventListener("click", closeDrawer);
+    var drawer = $("drawer");
+    if (drawer) {
+      drawer.addEventListener("click", function (e) {
+        if (e.target && e.target.getAttribute("data-drawer-close") === "1") closeDrawer();
+      });
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        if ($("modal") && !$("modal").classList.contains("hidden")) closeModal();
+        else if ($("drawer") && !$("drawer").classList.contains("hidden")) closeDrawer();
+      }
+    });
+
     window.addEventListener("hashchange", render);
   }
 
   function boot() {
     bind();
-    // Keep the admin key only in this page's JavaScript memory. Reloading the
-    // page intentionally requires re-authentication.
-    state.key = "";
+    state.key = loadSession();
     if (state.key) {
       api("GET", "/admin/system")
         .then(function (sys) {
           state.system = sys;
           setText($("shell-version"), (sys && sys.version) || "管理后台");
-          if (!location.hash || location.hash === "#" || location.hash === "#/") {
-            navigate("credentials");
+          updateTopbarStatus(sys);
+          if (!location.hash || location.hash === "#" || location.hash === "#/" || location.hash === "#/login") {
+            navigate("overview");
           }
           render();
         })
         .catch(function () {
-          if (!state.key) {
-            navigate("login");
-          }
+          clearSession();
+          navigate("login");
           render();
         });
     } else {
-      if (!location.hash || location.hash === "#" || location.hash === "#/credentials") {
+      if (!location.hash || location.hash === "#" || location.hash === "#/credentials" || location.hash === "#/overview") {
         navigate("login");
       }
       render();

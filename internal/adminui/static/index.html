@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>grokbuild 管理后台</title>
-  <link rel="stylesheet" href="/admin/ui/app.css?v=4" />
+  <link rel="stylesheet" href="/admin/ui/app.css?v=6" />
 </head>
 <body>
   <div id="app">
@@ -14,12 +14,13 @@
         <div class="card login-card">
           <div class="login-icon" aria-hidden="true">&#128273;</div>
           <h1 class="login-title">grokbuild 管理后台</h1>
-          <p class="muted login-desc">输入管理员密钥登录（仅保存在当前浏览器标签页，关闭后失效）</p>
+          <p class="muted login-desc">输入管理员密钥登录。默认保存在当前标签页（关闭标签后失效）；刷新页面无需重新输入。</p>
           <form id="login-form" class="stack">
             <label class="field">
               <span class="label">管理员密钥</span>
               <input id="login-key" type="password" autocomplete="current-password" placeholder="请输入 admin_key" required />
             </label>
+            <p class="muted login-hint">密钥通常位于 <code>data/meta.json</code> 的 <code>admin_key</code> 字段。</p>
             <button type="submit" class="btn btn-primary btn-block" id="login-submit">登录</button>
             <p id="login-error" class="error hidden" role="alert"></p>
           </form>
@@ -36,88 +37,178 @@
             <div class="brand-sub muted" id="shell-version">管理后台</div>
           </div>
         </div>
+        <div class="topbar-status" id="topbar-status" aria-live="polite">
+          <span class="status-dot status-dot-idle" id="status-dot" aria-hidden="true"></span>
+          <span class="status-text muted" id="status-text">—</span>
+        </div>
         <nav class="nav" id="main-nav" aria-label="主导航">
-          <a href="#/credentials" data-route="credentials">账号凭证</a>
-          <a href="#/clients" data-route="clients">客户端密钥</a>
-          <a href="#/settings" data-route="settings">运行设置</a>
-          <a href="#/system" data-route="system">系统信息</a>
-          <a href="#/integration" data-route="integration">接入示例</a>
+          <a href="#/overview" data-route="overview">概览</a>
+          <a href="#/credentials" data-route="credentials">凭证池</a>
+          <a href="#/clients" data-route="clients">客户端接入</a>
+          <a href="#/settings" data-route="settings">运行配置</a>
+          <a href="#/system" data-route="system">系统</a>
         </nav>
         <button type="button" class="btn btn-ghost" id="btn-logout">退出</button>
       </header>
 
+      <div id="crisis-banner" class="crisis-banner hidden" role="alert">
+        <div class="crisis-body">
+          <strong id="crisis-title">账号池异常</strong>
+          <span class="muted" id="crisis-detail"></span>
+        </div>
+        <div class="row gap">
+          <button type="button" class="btn btn-sm btn-primary" id="btn-crisis-view">查看受影响账号</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="btn-crisis-dismiss" aria-label="关闭横幅">关闭</button>
+        </div>
+      </div>
+
       <main class="main">
         <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+        <section id="page-overview" class="page hidden">
+          <div class="page-head">
+            <div>
+              <h2>概览</h2>
+              <p class="muted">账号池健康、启动清单与快捷操作</p>
+            </div>
+            <div class="row gap">
+              <button type="button" class="btn" id="btn-overview-refresh">刷新</button>
+              <button type="button" class="btn" id="btn-overview-inspect">立即巡检</button>
+              <button type="button" class="btn btn-primary" id="btn-overview-add">添加账号</button>
+            </div>
+          </div>
+          <div id="overview-checklist" class="card stack hidden"></div>
+          <div id="overview-stats" class="stat-grid"></div>
+          <div id="overview-body" class="stack"></div>
+        </section>
 
         <section id="page-credentials" class="page hidden">
           <div class="page-head">
             <div>
-              <h2>账号凭证</h2>
-              <p class="muted">Grok 授权账号池 · 启停 / 优先级 / 刷新令牌 / 账单</p>
+              <h2>凭证池</h2>
+              <p class="muted">Grok 授权账号 · 健康状态 / 优先级 / 令牌 / 代理</p>
             </div>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button type="button" class="btn" id="btn-cred-refresh-list">刷新列表</button>
-              <button type="button" class="btn btn-primary" id="btn-device-login">浏览器登录</button>
-              <button type="button" class="btn btn-primary" id="btn-import-default">导入本机 ~/.grok</button>
-              <button type="button" class="btn" id="btn-import-raw">批量导入</button>
+              <div class="btn-group">
+                <button type="button" class="btn btn-primary" id="btn-device-login">浏览器登录</button>
+                <button type="button" class="btn" id="btn-import-default">导入 ~/.grok</button>
+                <button type="button" class="btn" id="btn-import-raw">批量导入</button>
+              </div>
             </div>
           </div>
-          <div id="cred-empty" class="empty card hidden">
-            <h3>暂无凭证</h3>
-            <p class="muted">可从本机默认路径导入，或批量上传 Grok / CPA JSON 与 SSO 文件。</p>
+
+          <div class="toolbar card">
+            <label class="field toolbar-search">
+              <span class="label">搜索</span>
+              <input id="cred-search" type="search" placeholder="名称 / 邮箱 / ID" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span class="label">运行状态</span>
+              <select id="cred-filter-health">
+                <option value="all">全部</option>
+                <option value="healthy">健康</option>
+                <option value="cooling">冷却</option>
+                <option value="expired">过期</option>
+                <option value="auth_failed">认证失效</option>
+                <option value="quarantined">隔离</option>
+                <option value="disabled">已禁用</option>
+                <option value="problem">需处理</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">排序</span>
+              <select id="cred-sort">
+                <option value="priority_desc">优先级 ↓</option>
+                <option value="priority_asc">优先级 ↑</option>
+                <option value="expires_asc">过期时间 ↑</option>
+                <option value="updated_desc">最近更新</option>
+                <option value="name_asc">名称</option>
+              </select>
+            </label>
+            <div class="toolbar-meta muted" id="cred-count">—</div>
           </div>
-          <div id="cred-list" class="card-grid"></div>
+
+          <div id="cred-panel" class="stack">
+            <div id="cred-loading" class="panel-state card hidden">
+              <div class="skeleton-lines" aria-hidden="true">
+                <div class="skeleton"></div>
+                <div class="skeleton"></div>
+                <div class="skeleton"></div>
+              </div>
+              <p class="muted">加载凭证列表…</p>
+            </div>
+            <div id="cred-error" class="panel-state card error-panel hidden" role="alert">
+              <h3>加载失败</h3>
+              <p class="muted" id="cred-error-msg"></p>
+              <button type="button" class="btn btn-primary" id="btn-cred-retry">重试</button>
+            </div>
+            <div id="cred-empty" class="empty card hidden">
+              <h3>暂无凭证</h3>
+              <p class="muted">推荐使用浏览器登录添加本人 Grok 账号；也可导入本机 <code>~/.grok</code> 或批量文件。</p>
+              <div class="row gap wrap">
+                <button type="button" class="btn btn-primary" id="btn-empty-device">浏览器登录</button>
+                <button type="button" class="btn" id="btn-empty-import">导入本机 ~/.grok</button>
+              </div>
+            </div>
+            <div id="cred-filtered-empty" class="empty card hidden">
+              <h3>无匹配结果</h3>
+              <p class="muted">调整搜索或筛选条件后再试。</p>
+              <button type="button" class="btn" id="btn-cred-clear-filter">清除筛选</button>
+            </div>
+            <div id="cred-table-wrap" class="table-wrap card hidden">
+              <table class="data-table" id="cred-table">
+                <thead>
+                  <tr>
+                    <th>账号</th>
+                    <th>配置</th>
+                    <th>运行状态</th>
+                    <th>优先级</th>
+                    <th>过期</th>
+                    <th>最近错误</th>
+                    <th class="col-actions">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="cred-tbody"></tbody>
+              </table>
+              <div class="pager row gap end" id="cred-pager"></div>
+            </div>
+          </div>
         </section>
 
         <section id="page-clients" class="page hidden">
           <div class="page-head">
             <div>
-              <h2>客户端密钥</h2>
-              <p class="muted">下游 API 密钥 · 创建时仅展示一次明文</p>
+              <h2>客户端接入</h2>
+              <p class="muted">下游 API 密钥与 Claude Code / OpenAI 配置</p>
             </div>
             <div class="row gap">
               <button type="button" class="btn" id="btn-client-refresh">刷新</button>
               <button type="button" class="btn btn-primary" id="btn-client-create">创建密钥</button>
             </div>
           </div>
+          <div id="client-loading" class="panel-state card hidden">
+            <p class="muted">加载客户端密钥…</p>
+          </div>
+          <div id="client-error" class="panel-state card error-panel hidden" role="alert">
+            <h3>加载失败</h3>
+            <p class="muted" id="client-error-msg"></p>
+            <button type="button" class="btn btn-primary" id="btn-client-retry">重试</button>
+          </div>
           <div id="client-empty" class="empty card hidden">
             <h3>暂无客户端密钥</h3>
             <p class="muted">创建后会得到一次性明文密钥，用于 OpenAI 兼容客户端或 Claude Code。</p>
+            <button type="button" class="btn btn-primary" id="btn-empty-client-create">创建密钥</button>
           </div>
-          <div id="client-list" class="table-wrap card"></div>
-        </section>
-
-        <section id="page-system" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>系统信息</h2>
-              <p class="muted">进程配置与上游摘要</p>
+          <div id="client-list" class="table-wrap card hidden"></div>
+          <div class="card stack integration-card" id="integration-card">
+            <div class="page-head compact">
+              <div>
+                <h3>接入示例</h3>
+                <p class="muted">按当前访问地址生成环境变量 · 将 <code>&lt;客户端密钥&gt;</code> 换成真实 key</p>
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-copy-integration">复制全部</button>
             </div>
-            <button type="button" class="btn" id="btn-system-refresh">刷新</button>
-          </div>
-          <div id="system-body" class="card stack"></div>
-        </section>
-
-        <section id="page-settings" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>运行设置</h2>
-              <p class="muted">全局出站代理、SSO 转换服务与凭证自动巡检</p>
-            </div>
-            <button type="button" class="btn" id="btn-settings-refresh">刷新</button>
-          </div>
-          <div id="settings-body" class="card stack"></div>
-        </section>
-
-        <section id="page-integration" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>接入示例</h2>
-              <p class="muted">按当前访问地址生成环境变量 · 请把 &lt;客户端密钥&gt; 换成真实 key</p>
-            </div>
-            <button type="button" class="btn btn-primary" id="btn-copy-integration">复制全部</button>
-          </div>
-          <div class="card stack">
             <label class="field">
               <span class="label">Claude Code（Anthropic 协议）</span>
               <pre id="snippet-anthropic" class="code"></pre>
@@ -128,11 +219,44 @@
             </label>
           </div>
         </section>
+
+        <section id="page-system" class="page hidden">
+          <div class="page-head">
+            <div>
+              <h2>系统</h2>
+              <p class="muted">进程配置与上游摘要</p>
+            </div>
+            <button type="button" class="btn" id="btn-system-refresh">刷新</button>
+          </div>
+          <div id="system-body" class="card stack"></div>
+        </section>
+
+        <section id="page-settings" class="page hidden">
+          <div class="page-head">
+            <div>
+              <h2>运行配置</h2>
+              <p class="muted">全局出站代理、SSO 转换服务与凭证自动巡检</p>
+            </div>
+            <button type="button" class="btn" id="btn-settings-refresh">刷新</button>
+          </div>
+          <div id="settings-body" class="card stack"></div>
+        </section>
       </main>
     </div>
   </div>
 
-  <!-- Modal shell -->
+  <aside id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-backdrop" data-drawer-close="1"></div>
+    <div class="drawer-panel card" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <div class="drawer-head">
+        <h3 id="drawer-title">凭证详情</h3>
+        <button type="button" class="btn btn-ghost btn-icon" id="drawer-close" aria-label="关闭">&times;</button>
+      </div>
+      <div id="drawer-body" class="drawer-body"></div>
+      <div id="drawer-foot" class="drawer-foot row gap end"></div>
+    </div>
+  </aside>
+
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-backdrop" data-close="1"></div>
     <div class="modal-panel card">
@@ -145,6 +269,6 @@
     </div>
   </div>
 
-  <script src="/admin/ui/app.js?v=4" defer></script>
+  <script src="/admin/ui/app.js?v=6" defer></script>
 </body>
 </html>
