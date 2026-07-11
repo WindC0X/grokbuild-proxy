@@ -17,6 +17,8 @@ Releases 为准。
 - 凭证列表不再自动拉取每账号账单（消除 N+1 导致的多账号卡顿）；额度改为详情内按需加载。
 - 视觉对齐 Geist Dark 设计 token（纯黑底、白主按钮、蓝色强调）。
 - 客户端密钥支持启停（`POST /admin/clients/{id}/disable`），接入示例并入客户端页。
+- 概览增加「最近操作（本会话）」：导入/巡检/批量结果关闭弹窗后仍可查看。
+- 凭证表支持显式「加载本页额度」（仅当前页、有并发上限），列表仍不自动 N+1 拉账单。
 
 #### 测试
 
@@ -35,6 +37,10 @@ Releases 为准。
 - Restyle Admin UI with Geist Dark tokens.
 - Add client key enable/disable (`POST /admin/clients/{id}/disable`) and fold
   integration snippets into the clients page.
+- Add overview “recent actions (this session)” for import/inspection/batch
+  outcomes after modals close.
+- Add explicit “load page quota” for the visible credential page only (bounded
+  concurrency; list still never auto N+1 bills).
 
 #### Tests
 

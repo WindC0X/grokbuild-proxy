@@ -6,6 +6,7 @@
   var SESSION_KEY = "grokbuild_admin_key";
   var PAGE_SIZE = 50;
   var BILLING_CONCURRENCY = 3;
+  var ACTIVITY_MAX = 20;
 
   var state = {
     key: "",
@@ -27,6 +28,8 @@
     focusReturn: null,
     settingsDirty: false,
     settingsSaveHint: null,
+    // In-session operator history (import / inspection / batch); not durable audit.
+    activityLog: [],
   };
 
   // ---------- DOM helpers (no innerHTML for untrusted data) ----------
@@ -599,6 +602,51 @@
     show(banner, true);
   }
 
+  // ---------- In-session activity (import / inspection outcomes) ----------
+
+  function recordActivity(entry) {
+    if (!entry) return;
+    state.activityLog.unshift({
+      at: new Date().toISOString(),
+      kind: entry.kind || "info",
+      title: entry.title || "",
+      detail: entry.detail || "",
+      ok: entry.ok !== false,
+    });
+    if (state.activityLog.length > ACTIVITY_MAX) {
+      state.activityLog.length = ACTIVITY_MAX;
+    }
+    if (state.route === "overview") paintActivity();
+  }
+
+  function paintActivity() {
+    var host = $("overview-activity");
+    if (!host) return;
+    clear(host);
+    host.appendChild(el("h3", "", "最近操作（本会话）"));
+    host.appendChild(
+      el(
+        "p",
+        "muted small",
+        "导入、巡检、批量操作结果关闭弹窗后仍可在此查看（仅当前标签页会话，不落盘）。"
+      )
+    );
+    if (!state.activityLog.length) {
+      host.appendChild(el("p", "muted", "暂无记录。完成一次导入或巡检后会出现在这里。"));
+      return;
+    }
+    var list = el("ul", "activity-list");
+    state.activityLog.forEach(function (a) {
+      var li = el("li", a.ok ? "activity-ok" : "activity-err");
+      li.appendChild(el("div", "activity-title", a.title));
+      var meta = fmtTime(a.at);
+      if (a.detail) meta += " · " + a.detail;
+      li.appendChild(el("div", "muted small", meta));
+      list.appendChild(li);
+    });
+    host.appendChild(list);
+  }
+
   // ---------- Overview ----------
 
   function loadOverview() {
@@ -616,6 +664,7 @@
         setText($("shell-version"), (sys && sys.version) || "管理后台");
         updateTopbarStatus(sys);
         renderOverview(sys);
+        paintActivity();
         // Refresh credential cache for checklist without billing fan-out.
         return api("GET", "/admin/credentials").then(function (data) {
           state.credentials = (data && data.credentials) || [];
@@ -634,6 +683,7 @@
           panel.appendChild(retry);
           body.appendChild(panel);
         }
+        paintActivity();
       });
   }
 
@@ -783,9 +833,17 @@
   }
 
   function applyCredFiltersAndRender() {
-    var q = (($("cred-search") && $("cred-search").value) || state.credFilter.q || "").trim().toLowerCase();
-    var health = ($("cred-filter-health") && $("cred-filter-health").value) || state.credFilter.health || "all";
-    var sort = ($("cred-sort") && $("cred-sort").value) || state.credFilter.sort || "priority_desc";
+    // Prefer live control values when present — empty input must clear the query
+    // (do not fall back to prior state.credFilter.q via || chaining).
+    var q = $("cred-search")
+      ? String($("cred-search").value || "").trim().toLowerCase()
+      : String(state.credFilter.q || "").trim().toLowerCase();
+    var health = $("cred-filter-health")
+      ? String($("cred-filter-health").value || "all")
+      : state.credFilter.health || "all";
+    var sort = $("cred-sort")
+      ? String($("cred-sort").value || "priority_desc")
+      : state.credFilter.sort || "priority_desc";
     state.credFilter.q = q;
     state.credFilter.health = health;
     state.credFilter.sort = sort;
@@ -939,7 +997,9 @@
       });
     });
     chain.then(function () {
-      toast(actionLabel + "完成：成功 " + ok + " · 失败 " + fail, fail ? "err" : "ok");
+      var detail = "成功 " + ok + " · 失败 " + fail;
+      toast(actionLabel + "完成：" + detail, fail ? "err" : "ok");
+      recordActivity({ kind: "batch", title: actionLabel, detail: detail, ok: fail === 0 });
       state.selectedIds = {};
       loadCredentials();
     });
@@ -989,6 +1049,9 @@
 
     tr.appendChild(el("td", "mono", String(c.priority != null ? c.priority : 0)));
     tr.appendChild(el("td", "small", fmtTime(c.expires_at)));
+    var quotaTd = el("td", "quota-cell small muted");
+    setText(quotaTd, quotaCellText(c.id));
+    tr.appendChild(quotaTd);
     tr.appendChild(el("td", "small err-cell", c.last_error || "—"));
 
     var act = el("td", "col-actions");
@@ -1360,6 +1423,64 @@
     load();
   }
 
+  function quotaCellText(credId) {
+    var cached = state.billingCache[credId];
+    if (!cached || !cached.snap) return "—";
+    var build = (cached.snap && cached.snap.grok_build) || {};
+    if (!build.reported || build.shared_weekly_usage_percent == null) return "未报告";
+    return num(build.shared_weekly_usage_percent).toFixed(1) + "%";
+  }
+
+  // Load quota only for rows currently on the page — never full-pool auto N+1.
+  function loadVisiblePageQuota() {
+    var rows = document.querySelectorAll("#cred-tbody tr.cred-row");
+    var ids = [];
+    for (var i = 0; i < rows.length; i++) {
+      var id = rows[i].dataset.id;
+      if (id) ids.push(id);
+    }
+    if (!ids.length) {
+      toast("当前页无账号可加载额度", "err");
+      return;
+    }
+    if (ids.length > PAGE_SIZE) {
+      // Defensive: page size is the hard upper bound for this action.
+      ids = ids.slice(0, PAGE_SIZE);
+    }
+    toast("正在加载本页 " + ids.length + " 个账号额度…", "ok");
+    function quotaCellFor(credId) {
+      var list = document.querySelectorAll("#cred-tbody tr.cred-row");
+      for (var r = 0; r < list.length; r++) {
+        if (list[r].dataset.id === credId) return list[r].querySelector(".quota-cell");
+      }
+      return null;
+    }
+    ids.forEach(function (credId) {
+      var cell = quotaCellFor(credId);
+      if (cell) {
+        clear(cell);
+        cell.appendChild(el("span", "muted", "…"));
+      }
+      enqueueBilling(credId, function (err) {
+        var target = quotaCellFor(credId);
+        if (!target) return;
+        clear(target);
+        if (err) {
+          target.appendChild(el("span", "error", "失败"));
+          return;
+        }
+        setText(target, quotaCellText(credId));
+        target.className = "quota-cell small";
+      });
+    });
+    recordActivity({
+      kind: "quota",
+      title: "加载本页额度",
+      detail: ids.length + " 个账号（并发 ≤ " + BILLING_CONCURRENCY + "）",
+      ok: true,
+    });
+  }
+
   // fillCredentialUsage is only called from detail view (on demand), never list render.
   function fillCredentialUsage(box, credId, force) {
     if (!box || !credId) return;
@@ -1528,10 +1649,17 @@
       .then(function (data) {
         var n = (data && (data.imported || data.created + data.updated)) || 0;
         toast("已导入 " + n + " 条凭证", "ok");
+        recordActivity({
+          kind: "import",
+          title: "导入本机 ~/.grok",
+          detail: "导入 " + n + " 条" + (data && data.failed ? " · 失败 " + data.failed : ""),
+          ok: !(data && data.failed > 0 && n === 0),
+        });
         loadCredentials();
       })
       .catch(function (err) {
         toast("导入失败: " + err.message, "err");
+        recordActivity({ kind: "import", title: "导入本机 ~/.grok 失败", detail: err.message || "", ok: false });
       });
   }
 
@@ -1562,6 +1690,7 @@
               if (res && res.status === "complete") {
                 setText(status, "授权成功");
                 toast("账号授权成功", "ok");
+                recordActivity({ kind: "oauth", title: "浏览器登录成功", detail: "Device Login 完成", ok: true });
                 closeModal();
                 loadCredentials();
                 return;
@@ -1645,11 +1774,18 @@
           setText(status, message);
           renderImportJobDetails(job, importDetails);
           toast(message, job.failed ? "err" : "ok");
+          recordActivity({
+            kind: "import",
+            title: "批量导入",
+            detail: message,
+            ok: !(job.failed > 0 && num(job.created) + num(job.updated) === 0),
+          });
           loadCredentials();
         })
         .catch(function (err) {
           setText(status, "导入失败: " + err.message);
           toast("导入失败: " + err.message, "err");
+          recordActivity({ kind: "import", title: "批量导入失败", detail: err.message || "", ok: false });
         })
         .finally(function () {
           ok.disabled = false;
@@ -2193,12 +2329,19 @@
           (summary.mass_failure_guard ? " · 已触发批量故障保护" : "");
         if (statusNode) setText(statusNode, msg);
         toast("巡检完成", "ok");
+        recordActivity({ kind: "inspection", title: "凭证巡检完成", detail: msg, ok: true });
         if (state.route === "credentials") loadCredentials();
         if (state.route === "overview") loadOverview();
       })
       .catch(function (err) {
         if (statusNode) setText(statusNode, "巡检失败: " + err.message);
         toast("巡检失败: " + err.message, "err");
+        recordActivity({
+          kind: "inspection",
+          title: "凭证巡检失败",
+          detail: err.message || "",
+          ok: false,
+        });
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -2387,6 +2530,9 @@
 
     var credRefresh = $("btn-cred-refresh-list");
     if (credRefresh) credRefresh.addEventListener("click", loadCredentials);
+
+    var pageQuota = $("btn-page-quota");
+    if (pageQuota) pageQuota.addEventListener("click", loadVisiblePageQuota);
 
     var btnRetry = $("btn-cred-retry");
     if (btnRetry) btnRetry.addEventListener("click", loadCredentials);

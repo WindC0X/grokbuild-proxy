@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>grokbuild 管理后台</title>
-  <link rel="stylesheet" href="/admin/ui/app.css?v=8" />
+  <link rel="stylesheet" href="/admin/ui/app.css?v=9" />
 </head>
 <body>
   <div id="app">
@@ -80,6 +80,7 @@
           <div id="overview-checklist" class="card stack hidden"></div>
           <div id="overview-stats" class="stat-grid"></div>
           <div id="overview-body" class="stack"></div>
+          <div id="overview-activity" class="card stack" aria-live="polite"></div>
         </section>
 
         <section id="page-credentials" class="page hidden">
@@ -90,6 +91,7 @@
             </div>
             <div class="row gap wrap">
               <button type="button" class="btn" id="btn-cred-refresh-list">刷新列表</button>
+              <button type="button" class="btn" id="btn-page-quota" title="仅加载当前页账号额度，有并发上限，不会对全池 N+1">加载本页额度</button>
               <div class="btn-group">
                 <button type="button" class="btn btn-primary" id="btn-device-login">浏览器登录</button>
                 <button type="button" class="btn" id="btn-import-default">导入 ~/.grok</button>
@@ -178,6 +180,7 @@
                     <th>运行状态</th>
                     <th>优先级</th>
                     <th>过期</th>
+                    <th>额度</th>
                     <th>最近错误</th>
                     <th class="col-actions">操作</th>
                   </tr>
@@ -282,6 +285,6 @@
     </div>
   </div>
 
-  <script src="/admin/ui/app.js?v=8" defer></script>
+  <script src="/admin/ui/app.js?v=9" defer></script>
 </body>
 </html>

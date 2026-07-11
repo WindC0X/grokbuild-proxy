@@ -693,6 +693,44 @@ table,
   gap: 12px;
 }
 
+#overview-activity {
+  margin-top: 14px;
+  padding: 16px;
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.activity-list li {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.activity-list li.activity-ok {
+  border-color: var(--ok-border);
+}
+
+.activity-list li.activity-err {
+  border-color: var(--danger-border);
+}
+
+.activity-title {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.quota-cell {
+  white-space: nowrap;
+  min-width: 3.5em;
+}
+
 .err-cell {
   max-width: 220px;
   overflow: hidden;

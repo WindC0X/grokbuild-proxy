@@ -255,10 +255,12 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=8`,
-		`app.css?v=8`,
+		`app.js?v=9`,
+		`app.css?v=9`,
 		`id="cred-batch-bar"`,
 		`id="cred-select-all"`,
+		`id="overview-activity"`,
+		`id="btn-page-quota"`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("index.html missing shell marker %q", marker)
@@ -291,9 +293,73 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		"function installFocusTrap(container)",
 		"settings-tabs",
 		"beforeunload",
+		"function recordActivity(entry)",
+		"function paintActivity()",
+		"function loadVisiblePageQuota()",
+		"ACTIVITY_MAX = 20",
+		"activityLog",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)
+		}
+	}
+}
+
+func TestPageQuotaIsBoundedAndNotAutoOnList(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	// Page quota is explicit action, not automatic on list render.
+	if !strings.Contains(source, "function loadVisiblePageQuota()") {
+		t.Fatal("missing loadVisiblePageQuota")
+	}
+	// Must cap work to current page / PAGE_SIZE and reuse billing queue concurrency.
+	for _, marker := range []string{
+		"PAGE_SIZE",
+		"ids.slice(0, PAGE_SIZE)",
+		"enqueueBilling(credId",
+		"BILLING_CONCURRENCY",
+		`btn-page-quota`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("page quota missing bound marker %q", marker)
+		}
+	}
+	// List row render must still not call loadVisiblePageQuota or billing.
+	rowStart := strings.Index(source, "function renderCredentialRow(c)")
+	rowEnd := strings.Index(source[rowStart:], "function highlightSelectedRow")
+	if rowStart < 0 || rowEnd < 0 {
+		t.Fatal("could not bound renderCredentialRow")
+	}
+	rowBody := source[rowStart : rowStart+rowEnd]
+	for _, banned := range []string{"loadVisiblePageQuota", "enqueueBilling", "/billing", "fillCredentialUsage"} {
+		if strings.Contains(rowBody, banned) {
+			t.Fatalf("list row must not auto-load quota (%q)", banned)
+		}
+	}
+}
+
+func TestActivityHistorySurfacesImportAndInspection(t *testing.T) {
+	app, err := ReadStatic("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(app)
+	// recordActivity must be invoked from durable operator outcomes.
+	for _, marker := range []string{
+		`kind: "import"`,
+		`kind: "inspection"`,
+		`kind: "batch"`,
+		`title: "批量导入"`,
+		`title: "凭证巡检完成"`,
+		`title: "凭证巡检失败"`,
+		"overview-activity",
+		"本会话",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("activity history missing marker %q", marker)
 		}
 	}
 }

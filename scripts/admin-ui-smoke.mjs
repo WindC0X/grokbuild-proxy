@@ -92,6 +92,11 @@ try {
 
   // Checklist / stats present
   assert(await page.locator("#overview-stats").count(), "overview stats missing");
+  assert(await page.locator("#overview-activity").count(), "overview activity surface missing");
+  assert(
+    (await page.locator("#overview-activity").innerText()).includes("最近操作"),
+    "activity panel title missing"
+  );
 
   // --- Credentials ---
   await page.click('a[data-route="credentials"]');
@@ -135,7 +140,19 @@ try {
     const filtered = await page.locator("#cred-tbody tr.cred-row").count();
     assert(filtered === 1, `search alice-e2e should leave 1 row, got ${filtered}`);
     await page.fill("#cred-search", "");
-    await page.waitForTimeout(200);
+    // Poll row count without page.waitForFunction (CSP blocks unsafe-eval).
+    let restored = 0;
+    for (let i = 0; i < 20; i++) {
+      restored = await page.locator("#cred-tbody tr.cred-row").count();
+      if (restored >= 3) break;
+      await page.waitForTimeout(150);
+    }
+    assert(restored >= 3, `search clear should restore >=3 rows, got ${restored}`);
+
+    // Page quota is explicit (button exists); do not require live billing success.
+    assert((await page.locator("#btn-page-quota").count()) > 0, "page quota button missing");
+    const quotaCells = await page.locator("#cred-tbody td.quota-cell").count();
+    assert(quotaCells >= 3, `quota cells missing on rows, got ${quotaCells}`);
   }
 
   // Filter URL sync
@@ -173,6 +190,21 @@ try {
   await shot("05-clients");
   assert(await page.locator("#page-clients:not(.hidden)").count(), "clients page hidden");
   assert(await page.locator("#snippet-anthropic").count(), "integration snippet missing");
+
+  // Record an in-session activity via inspection attempt, then verify overview history.
+  await page.click('a[data-route="overview"]');
+  await page.waitForTimeout(300);
+  await page.click("#btn-overview-inspect");
+  await page.waitForTimeout(900);
+  // Stay on / re-enter overview so paintActivity reflects recordActivity.
+  await page.click('a[data-route="overview"]');
+  await page.waitForTimeout(500);
+  const activityText = await page.locator("#overview-activity").innerText();
+  assert(
+    activityText.includes("巡检"),
+    `activity not retained after inspection: ${activityText.slice(0, 240)}`
+  );
+  await shot("05b-activity");
 
   // --- Settings dirty leave ---
   await page.click('a[data-route="settings"]');
