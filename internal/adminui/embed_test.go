@@ -156,8 +156,8 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=7`,
-		`app.css?v=7`,
+		`app.js?v=8`,
+		`app.css?v=8`,
 		`id="cred-batch-bar"`,
 		`id="cred-select-all"`,
 	} {
@@ -187,6 +187,11 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		"function runBatch(actionLabel, worker)",
 		"function markSettingsDirty()",
 		`/admin/clients/" + encodeURIComponent(c.id) + "/disable"`,
+		"function syncCredHash()",
+		"function applyCredQueryFromHash()",
+		"function installFocusTrap(container)",
+		"settings-tabs",
+		"beforeunload",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)

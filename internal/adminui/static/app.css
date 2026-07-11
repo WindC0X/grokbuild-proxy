@@ -672,6 +672,27 @@ table,
   background: var(--accent-soft);
 }
 
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.settings-tab.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+
+.settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .err-cell {
   max-width: 220px;
   overflow: hidden;

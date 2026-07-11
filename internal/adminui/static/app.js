@@ -77,6 +77,10 @@
 
   // ---------- Modal / drawer a11y ----------
 
+  var FOCUSABLE =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  var trapHandler = null;
+
   function openModal(title, bodyNode, footNodes) {
     var modal = $("modal");
     state.focusReturn = document.activeElement;
@@ -90,13 +94,15 @@
       foot.appendChild(n);
     });
     show(modal, true);
-    trapFocus(modal);
-    var first = modal.querySelector("button, input, select, textarea, a[href]");
+    installFocusTrap(modal);
+    var first = modal.querySelector(FOCUSABLE);
     if (first) first.focus();
   }
 
   function closeModal() {
-    show($("modal"), false);
+    var modal = $("modal");
+    uninstallFocusTrap();
+    show(modal, false);
     clear($("modal-body"));
     clear($("modal-foot"));
     releaseFocus();
@@ -116,13 +122,14 @@
     });
     show(drawer, true);
     drawer.setAttribute("aria-hidden", "false");
-    trapFocus(drawer);
-    var first = drawer.querySelector("button, input, select, textarea, a[href]");
+    installFocusTrap(drawer);
+    var first = drawer.querySelector(FOCUSABLE);
     if (first) first.focus();
   }
 
   function closeDrawer() {
     var drawer = $("drawer");
+    uninstallFocusTrap();
     show(drawer, false);
     if (drawer) drawer.setAttribute("aria-hidden", "true");
     clear($("drawer-body"));
@@ -132,9 +139,30 @@
     highlightSelectedRow();
   }
 
-  function trapFocus(container) {
-    // Focus trapping is approximate: Esc handled globally.
-    container._trap = true;
+  function installFocusTrap(container) {
+    uninstallFocusTrap();
+    trapHandler = function (e) {
+      if (e.key !== "Tab" || !container || container.classList.contains("hidden")) return;
+      var nodes = container.querySelectorAll(FOCUSABLE);
+      if (!nodes.length) return;
+      var first = nodes[0];
+      var last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", trapHandler, true);
+  }
+
+  function uninstallFocusTrap() {
+    if (trapHandler) {
+      document.removeEventListener("keydown", trapHandler, true);
+      trapHandler = null;
+    }
   }
 
   function releaseFocus() {
@@ -249,6 +277,22 @@
 
   // ---------- Routing ----------
 
+  function parseHashQuery() {
+    var hash = (location.hash || "").replace(/^#\/?/, "");
+    var parts = hash.split("?");
+    var query = {};
+    if (parts[1]) {
+      parts[1].split("&").forEach(function (pair) {
+        if (!pair) return;
+        var kv = pair.split("=");
+        var k = decodeURIComponent(kv[0] || "");
+        var v = decodeURIComponent(kv.slice(1).join("=") || "");
+        if (k) query[k] = v;
+      });
+    }
+    return query;
+  }
+
   function parseRoute() {
     var hash = (location.hash || "").replace(/^#\/?/, "");
     var parts = hash.split("?");
@@ -256,6 +300,40 @@
     if (!name) name = state.key ? "overview" : "login";
     if (name === "integration") name = "clients";
     return name;
+  }
+
+  function applyCredQueryFromHash() {
+    var q = parseHashQuery();
+    if (q.q != null) state.credFilter.q = String(q.q);
+    if (q.health) state.credFilter.health = String(q.health);
+    if (q.sort) state.credFilter.sort = String(q.sort);
+    if (q.page) {
+      var p = parseInt(q.page, 10);
+      if (!isNaN(p) && p > 0) state.credFilter.page = p;
+    }
+    if ($("cred-search") && q.q != null) $("cred-search").value = state.credFilter.q;
+    if ($("cred-filter-health") && state.credFilter.health) {
+      $("cred-filter-health").value = state.credFilter.health;
+    }
+    if ($("cred-sort") && state.credFilter.sort) $("cred-sort").value = state.credFilter.sort;
+  }
+
+  function syncCredHash() {
+    if (state.route !== "credentials") return;
+    var parts = [];
+    if (state.credFilter.q) parts.push("q=" + encodeURIComponent(state.credFilter.q));
+    if (state.credFilter.health && state.credFilter.health !== "all") {
+      parts.push("health=" + encodeURIComponent(state.credFilter.health));
+    }
+    if (state.credFilter.sort && state.credFilter.sort !== "priority_desc") {
+      parts.push("sort=" + encodeURIComponent(state.credFilter.sort));
+    }
+    if (state.credFilter.page > 1) parts.push("page=" + encodeURIComponent(String(state.credFilter.page)));
+    var next = "#/credentials" + (parts.length ? "?" + parts.join("&") : "");
+    if (location.hash !== next) {
+      if (history.replaceState) history.replaceState(null, "", next);
+      else location.hash = next;
+    }
   }
 
   function navigate(route) {
@@ -266,6 +344,21 @@
         return;
       }
       state.settingsDirty = false;
+    }
+    if (route === "credentials") {
+      var parts = [];
+      if (state.credFilter.q) parts.push("q=" + encodeURIComponent(state.credFilter.q));
+      if (state.credFilter.health && state.credFilter.health !== "all") {
+        parts.push("health=" + encodeURIComponent(state.credFilter.health));
+      }
+      if (state.credFilter.sort && state.credFilter.sort !== "priority_desc") {
+        parts.push("sort=" + encodeURIComponent(state.credFilter.sort));
+      }
+      if (state.credFilter.page > 1) {
+        parts.push("page=" + encodeURIComponent(String(state.credFilter.page)));
+      }
+      location.hash = "#/credentials" + (parts.length ? "?" + parts.join("&") : "");
+      return;
     }
     location.hash = "#/" + route;
   }
@@ -320,8 +413,10 @@
     show($("page-system"), route === "system");
 
     if (route === "overview") loadOverview();
-    else if (route === "credentials") loadCredentials();
-    else if (route === "clients") {
+    else if (route === "credentials") {
+      applyCredQueryFromHash();
+      loadCredentials();
+    } else if (route === "clients") {
       loadClients();
       renderIntegration();
     } else if (route === "settings") loadSettings();
@@ -579,6 +674,7 @@
     goProblem.type = "button";
     goProblem.addEventListener("click", function () {
       state.credFilter.health = "problem";
+      state.credFilter.page = 1;
       var sel = $("cred-filter-health");
       if (sel) sel.value = "problem";
       navigate("credentials");
@@ -693,11 +789,13 @@
     state.credFilter.q = q;
     state.credFilter.health = health;
     state.credFilter.sort = sort;
+    syncCredHash();
 
     var list = state.credentials.slice();
     if (!list.length) {
       setCredPanel("empty");
       setText($("cred-count"), "0 个账号");
+      show($("cred-batch-bar"), false);
       return;
     }
 
@@ -1865,7 +1963,42 @@
     state.settingsSaveHint = el("p", "muted small", "");
     wrap.appendChild(state.settingsSaveHint);
 
-    wrap.appendChild(el("h3", "", "全局出站代理"));
+    var tabs = el("div", "settings-tabs");
+    tabs.setAttribute("role", "tablist");
+    var paneProxy = el("div", "settings-pane");
+    var paneSSO = el("div", "settings-pane hidden");
+    var paneInspect = el("div", "settings-pane hidden");
+    var panes = { proxy: paneProxy, sso: paneSSO, inspection: paneInspect };
+    var tabButtons = {};
+
+    function switchTab(name) {
+      Object.keys(panes).forEach(function (key) {
+        show(panes[key], key === name);
+        if (tabButtons[key]) {
+          tabButtons[key].classList.toggle("active", key === name);
+          tabButtons[key].setAttribute("aria-selected", key === name ? "true" : "false");
+        }
+      });
+    }
+
+    [
+      ["proxy", "出站代理"],
+      ["sso", "SSO 转换"],
+      ["inspection", "自动巡检"],
+    ].forEach(function (item, idx) {
+      var btn = el("button", "btn btn-sm settings-tab" + (idx === 0 ? " active" : ""), item[1]);
+      btn.type = "button";
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", idx === 0 ? "true" : "false");
+      btn.addEventListener("click", function () {
+        switchTab(item[0]);
+      });
+      tabButtons[item[0]] = btn;
+      tabs.appendChild(btn);
+    });
+    wrap.appendChild(tabs);
+
+    paneProxy.appendChild(el("h3", "", "全局出站代理"));
     var proxyMode = settingSelect(
       "代理模式",
       [
@@ -1876,17 +2009,17 @@
       globalProxy.mode || "environment"
     );
     proxyMode.input.addEventListener("change", markSettingsDirty);
-    wrap.appendChild(proxyMode.field);
-    if (globalProxy.url) wrap.appendChild(el("p", "muted", "当前：" + globalProxy.url));
+    paneProxy.appendChild(proxyMode.field);
+    if (globalProxy.url) paneProxy.appendChild(el("p", "muted", "当前：" + globalProxy.url));
     var proxyURL = settingInput(
       "新代理 URL",
       "password",
       "http://user:pass@host:port 或 socks5h://host:port"
     );
     proxyURL.input.addEventListener("input", markSettingsDirty);
-    wrap.appendChild(proxyURL.field);
+    paneProxy.appendChild(proxyURL.field);
 
-    wrap.appendChild(el("h3", "", "SSO 转换服务"));
+    paneSSO.appendChild(el("h3", "", "SSO 转换服务"));
     var converterEnabled = settingCheckbox("启用 SSO 文件转换", !!converter.enabled);
     var converterEndpoint = settingInput("服务端点", "url", "https://converter.example");
     converterEndpoint.input.value = converter.endpoint || "";
@@ -1909,15 +2042,15 @@
       converterTimeout,
       converterBatch,
     ].forEach(function (item) {
-      wrap.appendChild(item.field);
+      paneSSO.appendChild(item.field);
       var ev = item.input.type === "checkbox" || item.input.tagName === "SELECT" ? "change" : "input";
       item.input.addEventListener(ev, markSettingsDirty);
     });
-    wrap.appendChild(
+    paneSSO.appendChild(
       el("p", "muted", converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key")
     );
 
-    wrap.appendChild(el("h3", "", "凭证自动巡检"));
+    paneInspect.appendChild(el("h3", "", "凭证自动巡检"));
     var inspectEnabled = settingCheckbox("启用定时巡检", !!inspection.enabled);
     var inspectInterval = settingInput("巡检间隔（秒）", "number");
     inspectInterval.input.value = inspection.interval_sec || 3600;
@@ -1937,13 +2070,19 @@
       inspectConfirm,
       inspectPurge,
     ].forEach(function (item) {
-      wrap.appendChild(item.field);
+      paneInspect.appendChild(item.field);
       var ev = item.input.type === "checkbox" || item.input.tagName === "SELECT" ? "change" : "input";
       item.input.addEventListener(ev, markSettingsDirty);
     });
-    wrap.appendChild(el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。"));
+    paneInspect.appendChild(
+      el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。")
+    );
     var inspectionStatus = el("p", "muted", "巡检状态加载中…");
-    wrap.appendChild(inspectionStatus);
+    paneInspect.appendChild(inspectionStatus);
+
+    wrap.appendChild(paneProxy);
+    wrap.appendChild(paneSSO);
+    wrap.appendChild(paneInspect);
     api("GET", "/admin/inspection")
       .then(function (data) {
         if (data.running) setText(inspectionStatus, "巡检正在运行");
@@ -1969,7 +2108,7 @@
     runInspection.addEventListener("click", function () {
       runInspectionOnce(inspectionStatus, runInspection);
     });
-    wrap.appendChild(runInspection);
+    paneInspect.appendChild(runInspection);
 
     var save = el("button", "btn btn-primary", "保存运行设置");
     save.type = "button";
@@ -2374,10 +2513,17 @@
     if (crisisView) {
       crisisView.addEventListener("click", function () {
         state.credFilter.health = "problem";
+        state.credFilter.page = 1;
         if ($("cred-filter-health")) $("cred-filter-health").value = "problem";
         navigate("credentials");
       });
     }
+
+    window.addEventListener("beforeunload", function (e) {
+      if (!state.settingsDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
     var crisisDismiss = $("btn-crisis-dismiss");
     if (crisisDismiss) {
       crisisDismiss.addEventListener("click", function () {
