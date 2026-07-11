@@ -1144,6 +1144,10 @@ func isNotFoundErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, storage.ErrNotFound) {
+		return true
+	}
+	// Fallback for older error strings outside storage.ErrNotFound.
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not found")
 }

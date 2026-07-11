@@ -429,11 +429,9 @@ func (f *fakeStore) SetClientDisabled(id string, disabled bool) (storage.ClientK
 	return ck, nil
 }
 
-type nfErr struct{ kind, id string }
-
-func (e nfErr) Error() string { return "storage: " + e.kind + " " + e.id + " not found" }
-
-func errNF(kind, id string) error { return nfErr{kind, id} }
+func errNF(kind, id string) error {
+	return fmt.Errorf("storage: %s %q %w", kind, id, storage.ErrNotFound)
+}
 
 func TestAdminCredentialsMasked(t *testing.T) {
 	store := newFakeStore()

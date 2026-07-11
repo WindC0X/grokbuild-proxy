@@ -107,7 +107,7 @@ func (s *Store) GetCredential(id string) (Credential, error) {
 		}
 		credential, ok := s.credentialsIndex[id]
 		if !ok {
-			return fmt.Errorf("storage: credential %q not found", id)
+			return errNotFound("credential", id)
 		}
 		found = cloneCredential(credential)
 		return nil
@@ -543,7 +543,7 @@ func (s *Store) UpdateCredential(c Credential) (Credential, error) {
 			}
 		}
 		if idx < 0 {
-			return fmt.Errorf("storage: credential %q not found", c.ID)
+			return errNotFound("credential", c.ID)
 		}
 		c.CreatedAt = doc.Credentials[idx].CreatedAt
 		c.Revision = doc.Credentials[idx].Revision + 1
@@ -581,7 +581,7 @@ func (s *Store) PatchCredential(id string, mutate func(*Credential) error) (Cred
 			}
 		}
 		if idx < 0 {
-			return fmt.Errorf("storage: credential %q not found", id)
+			return errNotFound("credential", id)
 		}
 		cur := doc.Credentials[idx]
 		if err := mutate(&cur); err != nil {
@@ -618,7 +618,7 @@ func (s *Store) DeleteCredential(id string) error {
 			next = append(next, c)
 		}
 		if !found {
-			return fmt.Errorf("storage: credential %q not found", id)
+			return errNotFound("credential", id)
 		}
 		doc.Credentials = next
 		return s.saveCredentials(doc)
@@ -654,7 +654,7 @@ func (s *Store) DeleteCredentialIfPurgeEligible(id string, expectedRevision uint
 			}
 		}
 		if idx < 0 {
-			return fmt.Errorf("storage: credential %q not found", id)
+			return errNotFound("credential", id)
 		}
 
 		credential := doc.Credentials[idx]

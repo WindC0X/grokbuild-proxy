@@ -62,7 +62,7 @@ func (s *Store) GetClient(id string) (ClientKey, error) {
 				return nil
 			}
 		}
-		return fmt.Errorf("storage: client %q not found", id)
+		return errNotFound("client", id)
 	})
 	return found, err
 }
@@ -120,7 +120,7 @@ func (s *Store) DeleteClient(id string) error {
 			next = append(next, c)
 		}
 		if !found {
-			return fmt.Errorf("storage: client %q not found", id)
+			return errNotFound("client", id)
 		}
 		doc.Clients = next
 		return s.saveClients(doc)
@@ -142,7 +142,7 @@ func (s *Store) SetClientDisabled(id string, disabled bool) (ClientKey, error) {
 				return s.saveClients(doc)
 			}
 		}
-		return fmt.Errorf("storage: client %q not found", id)
+		return errNotFound("client", id)
 	})
 	return updated, err
 }

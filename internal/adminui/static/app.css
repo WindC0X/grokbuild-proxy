@@ -186,18 +186,46 @@ body {
   overflow: hidden;
 }
 
+/* Lucide / animate-ui style: stroke icons, not filled paths. */
 .icon {
   width: 16px;
   height: 16px;
   display: inline-block;
-  vertical-align: -0.15em;
+  vertical-align: -0.2em;
   flex-shrink: 0;
-  fill: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.18s ease, opacity 0.12s ease;
 }
 
 .icon-lg {
   width: 22px;
   height: 22px;
+}
+
+.sidebar-nav a:hover .icon,
+.seg-btn:hover .icon,
+.btn:hover .icon,
+.login-icon .icon {
+  transform: scale(1.06);
+}
+
+.seg-btn[data-theme-pref="sun"]:hover .icon,
+.seg-btn[data-theme-pref="light"]:hover .icon {
+  transform: rotate(20deg) scale(1.06);
+}
+
+.sidebar-nav a.active .icon {
+  opacity: 1;
+}
+
+.brand-mark .icon {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.25;
 }
 
 .skip-link {
