@@ -19,11 +19,14 @@ Releases 为准。
 - 客户端密钥支持启停（`POST /admin/clients/{id}/disable`），接入示例并入客户端页。
 - 概览增加「最近操作（本会话）」：导入/巡检/批量结果关闭弹窗后仍可查看。
 - 凭证表支持显式「加载本页额度」（仅当前页、有并发上限），列表仍不自动 N+1 拉账单。
+- `GET /admin/credentials` 支持服务端筛选/排序/分页（`q`/`health`/`sort`/`page`/`limit`，
+  默认 limit 50、上限 200），响应含 `total`/`offset`/`limit`/`has_more`；Admin 表仅渲染当前页。
 
 #### 测试
 
 - 补充 Admin UI 静态契约、客户端启停/批量 disable 集成用例，以及 Chrome/Playwright 冒烟
   （`make test-admin-ui-smoke` / `TestAdminUIBrowserSmoke`）。
+- 补充凭证列表服务端分页/筛选单元与 HTTP 契约测试。
 
 ### English
 
@@ -41,11 +44,15 @@ Releases 为准。
   outcomes after modals close.
 - Add explicit “load page quota” for the visible credential page only (bounded
   concurrency; list still never auto N+1 bills).
+- `GET /admin/credentials` supports server-side filter/sort/paging (`q`/`health`/
+  `sort`/`page`/`limit`; default limit 50, max 200) with `total`/`offset`/`limit`/
+  `has_more`; Admin table renders the current page only.
 
 #### Tests
 
 - Add Admin UI static contracts, client disable / batch disable coverage, and a
   Chrome/Playwright browser smoke (`make test-admin-ui-smoke`).
+- Add credential list server paging/filter unit and HTTP contract tests.
 
 ## [0.2.0] - 2026-07-11
 

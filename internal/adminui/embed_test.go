@@ -100,9 +100,18 @@ func TestNoAutomaticBillingFanOutOnListRender(t *testing.T) {
 	if strings.Contains(loadBody, "/billing") || strings.Contains(loadBody, "fillCredentialUsage") {
 		t.Fatal("loadCredentials must not request billing for each credential")
 	}
-	// List fetch is a single collection endpoint.
-	if !strings.Contains(loadBody, `"/admin/credentials"`) {
-		t.Fatal("loadCredentials should fetch credential collection once")
+	// List fetch goes through the server-paged collection helper (one request).
+	if !strings.Contains(loadBody, "credentialsListURL()") {
+		t.Fatal("loadCredentials should fetch via credentialsListURL (server paging)")
+	}
+	if !strings.Contains(source, "function credentialsListURL()") {
+		t.Fatal("expected credentialsListURL helper")
+	}
+	if !strings.Contains(source, `"/admin/credentials?"`) && !strings.Contains(source, `"/admin/credentials?" +`) {
+		// credentialsListURL builds "/admin/credentials?" + query
+		if !strings.Contains(source, "/admin/credentials?") {
+			t.Fatal("credentialsListURL should target /admin/credentials?…")
+		}
 	}
 
 	// On-demand helper remains available for detail view.
@@ -281,8 +290,11 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 	for _, marker := range []string{
 		"PAGE_SIZE = 50",
 		"function applyCredFiltersAndRender()",
+		"function renderCredentialPage()",
+		"function credentialsListURL()",
 		"function renderPager(pages)",
-		`health === "problem"`,
+		"credTotal",
+		"服务端分页",
 		"function upsertCredentialLocal(c)",
 		"function removeCredentialLocal(id)",
 		"function runBatch(actionLabel, worker)",

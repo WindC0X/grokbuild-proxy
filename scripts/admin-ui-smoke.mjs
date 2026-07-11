@@ -134,18 +134,21 @@ try {
     await page.waitForTimeout(150);
     assert(await page.locator("#cred-batch-bar.hidden").count(), "batch bar still visible after clear");
 
-    // Search narrows list
+    // Search narrows list (server-side q + 280ms input debounce — poll, no waitForFunction/CSP).
     await page.fill("#cred-search", "alice-e2e");
-    await page.waitForTimeout(250);
-    const filtered = await page.locator("#cred-tbody tr.cred-row").count();
+    let filtered = 0;
+    for (let i = 0; i < 30; i++) {
+      filtered = await page.locator("#cred-tbody tr.cred-row").count();
+      if (filtered === 1) break;
+      await page.waitForTimeout(100);
+    }
     assert(filtered === 1, `search alice-e2e should leave 1 row, got ${filtered}`);
     await page.fill("#cred-search", "");
-    // Poll row count without page.waitForFunction (CSP blocks unsafe-eval).
     let restored = 0;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       restored = await page.locator("#cred-tbody tr.cred-row").count();
       if (restored >= 3) break;
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(100);
     }
     assert(restored >= 3, `search clear should restore >=3 rows, got ${restored}`);
 
@@ -155,10 +158,13 @@ try {
     assert(quotaCells >= 3, `quota cells missing on rows, got ${quotaCells}`);
   }
 
-  // Filter URL sync
+  // Filter URL sync (server re-fetch updates hash in loadCredentials)
   await page.selectOption("#cred-filter-health", "problem");
-  await page.waitForTimeout(300);
-  const hashFilter = page.url();
+  let hashFilter = page.url();
+  for (let i = 0; i < 20 && !hashFilter.includes("health=problem"); i++) {
+    await page.waitForTimeout(100);
+    hashFilter = page.url();
+  }
   assert(hashFilter.includes("health=problem"), `filter not in hash: ${hashFilter}`);
 
   // Refresh restores filter from hash

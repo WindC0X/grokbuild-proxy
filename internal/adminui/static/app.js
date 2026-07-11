@@ -14,6 +14,10 @@
     system: null,
     settings: null,
     credentials: [],
+    // Server-side list totals (current page only lives in credentials[]).
+    credTotal: 0,
+    credOffset: 0,
+    credLimit: PAGE_SIZE,
     clients: [],
     credFilter: { q: "", health: "all", sort: "priority_desc", page: 1 },
     selectedCredId: "",
@@ -665,9 +669,9 @@
         updateTopbarStatus(sys);
         renderOverview(sys);
         paintActivity();
-        // Refresh credential cache for checklist without billing fan-out.
-        return api("GET", "/admin/credentials").then(function (data) {
-          state.credentials = (data && data.credentials) || [];
+        // Checklist only needs existence counts — avoid downloading the full pool.
+        return api("GET", "/admin/credentials?limit=1").then(function (data) {
+          state.credTotal = data && data.total != null ? num(data.total) : ((data && data.credentials) || []).length;
           renderChecklist();
         });
       })
@@ -743,7 +747,8 @@
   function renderChecklist() {
     var host = $("overview-checklist");
     if (!host) return;
-    var hasCred = state.credentials.length > 0;
+    var poolTotal = state.system && state.system.pool ? num(state.system.pool.total) : 0;
+    var hasCred = state.credTotal > 0 || poolTotal > 0;
     var hasClient = state.clients.length > 0;
     // Lazy-load clients if unknown.
     if (!hasClient && state.key) {
@@ -806,6 +811,34 @@
     show($("cred-table-wrap"), mode === "table");
   }
 
+  function syncFilterFromControls() {
+    // Prefer live control values when present — empty input must clear the query.
+    state.credFilter.q = $("cred-search")
+      ? String($("cred-search").value || "").trim().toLowerCase()
+      : String(state.credFilter.q || "").trim().toLowerCase();
+    state.credFilter.health = $("cred-filter-health")
+      ? String($("cred-filter-health").value || "all")
+      : state.credFilter.health || "all";
+    state.credFilter.sort = $("cred-sort")
+      ? String($("cred-sort").value || "priority_desc")
+      : state.credFilter.sort || "priority_desc";
+    if (state.credFilter.page < 1) state.credFilter.page = 1;
+  }
+
+  function credentialsListURL() {
+    syncFilterFromControls();
+    var parts = [
+      "page=" + encodeURIComponent(String(state.credFilter.page)),
+      "limit=" + encodeURIComponent(String(PAGE_SIZE)),
+    ];
+    if (state.credFilter.q) parts.push("q=" + encodeURIComponent(state.credFilter.q));
+    if (state.credFilter.health && state.credFilter.health !== "all") {
+      parts.push("health=" + encodeURIComponent(state.credFilter.health));
+    }
+    if (state.credFilter.sort) parts.push("sort=" + encodeURIComponent(state.credFilter.sort));
+    return "/admin/credentials?" + parts.join("&");
+  }
+
   function loadCredentials() {
     if (state.listAbort) {
       try {
@@ -815,10 +848,16 @@
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     state.listAbort = controller;
     setCredPanel("loading");
-    api("GET", "/admin/credentials", undefined, controller ? { signal: controller.signal } : {})
+    // Sync controls → state before hash + URL (hash must not lag behind DOM filters).
+    var listURL = credentialsListURL();
+    syncCredHash();
+    api("GET", listURL, undefined, controller ? { signal: controller.signal } : {})
       .then(function (data) {
         state.credentials = (data && data.credentials) || [];
-        applyCredFiltersAndRender();
+        state.credTotal = data && data.total != null ? num(data.total) : state.credentials.length;
+        state.credOffset = data && data.offset != null ? num(data.offset) : 0;
+        state.credLimit = data && data.limit != null ? num(data.limit) : PAGE_SIZE;
+        renderCredentialPage();
         // Refresh pool status without coupling to billing.
         return api("GET", "/admin/system").then(function (sys) {
           state.system = sys;
@@ -832,72 +871,46 @@
       });
   }
 
+  // Server already filtered/sorted/paged — only render the current page payload.
   function applyCredFiltersAndRender() {
-    // Prefer live control values when present — empty input must clear the query
-    // (do not fall back to prior state.credFilter.q via || chaining).
-    var q = $("cred-search")
-      ? String($("cred-search").value || "").trim().toLowerCase()
-      : String(state.credFilter.q || "").trim().toLowerCase();
-    var health = $("cred-filter-health")
-      ? String($("cred-filter-health").value || "all")
-      : state.credFilter.health || "all";
-    var sort = $("cred-sort")
-      ? String($("cred-sort").value || "priority_desc")
-      : state.credFilter.sort || "priority_desc";
-    state.credFilter.q = q;
-    state.credFilter.health = health;
-    state.credFilter.sort = sort;
-    syncCredHash();
+    // Filter controls changed: reset to page 1 and re-fetch from server.
+    state.credFilter.page = 1;
+    loadCredentials();
+  }
 
-    var list = state.credentials.slice();
-    if (!list.length) {
-      setCredPanel("empty");
-      setText($("cred-count"), "0 个账号");
-      show($("cred-batch-bar"), false);
+  function renderCredentialPage() {
+    var total = state.credTotal;
+    var pageItems = state.credentials || [];
+    var limit = state.credLimit || PAGE_SIZE;
+    var pages = Math.max(1, Math.ceil(total / limit) || 1);
+    // Clamp out-of-range page after deletes/filter shrinks; re-fetch once.
+    if (total > 0 && state.credFilter.page > pages) {
+      state.credFilter.page = pages;
+      loadCredentials();
       return;
     }
-
-    list = list.filter(function (c) {
-      if (q) {
-        var hay = [c.name, c.email, c.id].join(" ").toLowerCase();
-        if (hay.indexOf(q) < 0) return false;
-      }
-      var h = runtimeHealth(c).key;
-      if (health === "all") return true;
-      if (health === "problem") return isProblem(c);
-      return h === health;
-    });
-
-    list.sort(function (a, b) {
-      switch (sort) {
-        case "priority_asc":
-          return num(a.priority) - num(b.priority);
-        case "expires_asc":
-          return new Date(a.expires_at || 0) - new Date(b.expires_at || 0);
-        case "updated_desc":
-          return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
-        case "name_asc":
-          return String(a.name || a.email || a.id || "").localeCompare(String(b.name || b.email || b.id || ""));
-        case "priority_desc":
-        default:
-          return num(b.priority) - num(a.priority);
-      }
-    });
-
-    var total = list.length;
-    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    if (state.credFilter.page > pages) state.credFilter.page = pages;
-    if (state.credFilter.page < 1) state.credFilter.page = 1;
-    var start = (state.credFilter.page - 1) * PAGE_SIZE;
-    var pageItems = list.slice(start, start + PAGE_SIZE);
+    var start = state.credOffset;
+    var end = start + pageItems.length;
 
     setText(
       $("cred-count"),
-      "显示 " + (total ? start + 1 : 0) + "–" + (start + pageItems.length) + " / 筛选 " + total + " · 共 " + state.credentials.length
+      "显示 " + (total && pageItems.length ? start + 1 : 0) + "–" + end + " / 筛选 " + total
     );
 
+    if (total === 0) {
+      // Distinguish empty pool vs empty filter when possible via health/q.
+      var filtered =
+        (state.credFilter.q && state.credFilter.q.length > 0) ||
+        (state.credFilter.health && state.credFilter.health !== "all");
+      setCredPanel(filtered ? "filtered" : "empty");
+      show($("cred-batch-bar"), false);
+      renderPager(1);
+      return;
+    }
     if (!pageItems.length) {
       setCredPanel("filtered");
+      show($("cred-batch-bar"), false);
+      renderPager(pages);
       return;
     }
 
@@ -922,17 +935,17 @@
     prev.disabled = state.credFilter.page <= 1;
     prev.addEventListener("click", function () {
       state.credFilter.page--;
-      applyCredFiltersAndRender();
+      loadCredentials();
     });
     var next = el("button", "btn btn-sm", "下一页");
     next.type = "button";
     next.disabled = state.credFilter.page >= pages;
     next.addEventListener("click", function () {
       state.credFilter.page++;
-      applyCredFiltersAndRender();
+      loadCredentials();
     });
     host.appendChild(prev);
-    host.appendChild(el("span", "muted", "第 " + state.credFilter.page + " / " + pages + " 页"));
+    host.appendChild(el("span", "muted", "第 " + state.credFilter.page + " / " + pages + " 页 · 服务端分页"));
     host.appendChild(next);
   }
 
@@ -971,8 +984,7 @@
 
   function clearSelection() {
     state.selectedIds = {};
-    updateBatchBar();
-    applyCredFiltersAndRender();
+    renderCredentialPage();
   }
 
   function runBatch(actionLabel, worker) {
@@ -1221,7 +1233,7 @@
             c.priority = n;
             upsertCredentialLocal(c);
           }
-          applyCredFiltersAndRender();
+          loadCredentials();
           openCredentialDetail(c.id);
         })
         .catch(function (err) {
@@ -1290,7 +1302,7 @@
           c.enabled = !c.enabled;
           upsertCredentialLocal(c);
         }
-        applyCredFiltersAndRender();
+        loadCredentials();
         if (state.selectedCredId === c.id) openCredentialDetail(c.id);
       })
       .catch(function (err) {
@@ -1303,7 +1315,7 @@
       .then(function (updated) {
         toast("令牌已刷新", "ok");
         if (updated && updated.id) upsertCredentialLocal(updated);
-        applyCredFiltersAndRender();
+        loadCredentials();
         if (state.selectedCredId === c.id) openCredentialDetail(c.id);
       })
       .catch(function (err) {
@@ -1318,7 +1330,7 @@
         toast("已删除", "ok");
         removeCredentialLocal(c.id);
         if (state.selectedCredId === c.id) closeDrawer();
-        applyCredFiltersAndRender();
+        loadCredentials();
       })
       .catch(function (err) {
         toast("删除失败: " + err.message, "err");
@@ -1375,7 +1387,7 @@
           toast("凭证代理已更新", "ok");
           closeModal();
           if (updated && updated.id) upsertCredentialLocal(updated);
-          applyCredFiltersAndRender();
+          loadCredentials();
           if (state.selectedCredId === c.id) openCredentialDetail(c.id);
         })
         .catch(function (err) {
@@ -2606,12 +2618,21 @@
       });
     }
 
-    ["cred-search", "cred-filter-health", "cred-sort"].forEach(function (id) {
+    var searchTimer = null;
+    var searchNode = $("cred-search");
+    if (searchNode) {
+      searchNode.addEventListener("input", function () {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () {
+          searchTimer = null;
+          applyCredFiltersAndRender();
+        }, 280);
+      });
+    }
+    ["cred-filter-health", "cred-sort"].forEach(function (id) {
       var node = $(id);
       if (!node) return;
-      var ev = id === "cred-search" ? "input" : "change";
-      node.addEventListener(ev, function () {
-        state.credFilter.page = 1;
+      node.addEventListener("change", function () {
         applyCredFiltersAndRender();
       });
     });

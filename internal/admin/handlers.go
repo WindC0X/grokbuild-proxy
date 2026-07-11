@@ -259,17 +259,35 @@ func subtleConstantTimeEq(a, b string) bool {
 }
 
 // ListCredentials GET /admin/credentials
+//
+// Supports optional server-side filter/paging for large pools:
+//
+//	q, health, sort, page|offset, limit (default 50, max 200)
+//
+// Response always includes total/offset/limit/has_more so the Admin SPA can
+// avoid holding the full credential set in browser memory.
 func (h *Handlers) ListCredentials(w http.ResponseWriter, r *http.Request) {
 	creds, err := h.Store.ListCredentials()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]maskedCredential, 0, len(creds))
-	for _, c := range creds {
+	query := parseCredentialListQuery(r.URL.Query(), time.Now())
+	page, total, offset, limit := pageCredentials(creds, query)
+	out := make([]maskedCredential, 0, len(page))
+	for _, c := range page {
 		out = append(out, h.maskedCredential(c))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"credentials": out})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"credentials": out,
+		"total":       total,
+		"offset":      offset,
+		"limit":       limit,
+		"has_more":    offset+len(out) < total,
+		"q":           query.Q,
+		"health":      query.Health,
+		"sort":        query.Sort,
+	})
 }
 
 // CreateCredential POST /admin/credentials

@@ -458,6 +458,10 @@ func TestAdminCredentialsMasked(t *testing.T) {
 
 	var parsed struct {
 		Credentials []map[string]any `json:"credentials"`
+		Total       int              `json:"total"`
+		Offset      int              `json:"offset"`
+		Limit       int              `json:"limit"`
+		HasMore     bool             `json:"has_more"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &parsed); err != nil {
 		t.Fatal(err)
@@ -465,9 +469,108 @@ func TestAdminCredentialsMasked(t *testing.T) {
 	if len(parsed.Credentials) != 1 {
 		t.Fatalf("len=%d", len(parsed.Credentials))
 	}
+	if parsed.Total != 1 || parsed.Limit != 50 || parsed.Offset != 0 || parsed.HasMore {
+		t.Fatalf("paging envelope total=%d limit=%d offset=%d has_more=%v", parsed.Total, parsed.Limit, parsed.Offset, parsed.HasMore)
+	}
 	at, _ := parsed.Credentials[0]["access_token"].(string)
 	if at == "super-secret-access-token-value" || !strings.Contains(at, "***") {
 		t.Fatalf("access_token not masked: %q", at)
+	}
+}
+
+func TestAdminCredentialsListServerPaging(t *testing.T) {
+	store := newFakeStore()
+	now := time.Now().UTC()
+	for i, name := range []string{"alice", "bob", "carol", "dave", "erin"} {
+		id := "cred_" + name
+		store.creds[id] = storage.Credential{
+			ID:           id,
+			Name:         name,
+			Email:        name + "@x.com",
+			AccessToken:  "access-" + name,
+			RefreshToken: "refresh-" + name,
+			Enabled:      name != "carol",
+			Priority:     (5 - i) * 10,
+			ExpiresAt:    now.Add(2 * time.Hour),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+	}
+	// bob is cooling → health filter "problem" (non-healthy) includes bob + carol
+	cool := now.Add(time.Hour)
+	bob := store.creds["cred_bob"]
+	bob.CooldownUntil = &cool
+	bob.LastError = "http 429"
+	store.creds["cred_bob"] = bob
+
+	h := &Handlers{Store: store, AdminKey: "sk-admin-test", Config: config.Default()}
+	req := httptest.NewRequest(http.MethodGet, "/admin/credentials?q=a&sort=name_asc&limit=2&page=1", nil)
+	req.Header.Set("Authorization", "Bearer sk-admin-test")
+	rr := httptest.NewRecorder()
+	h.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var page1 struct {
+		Credentials []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"credentials"`
+		Total   int  `json:"total"`
+		Offset  int  `json:"offset"`
+		Limit   int  `json:"limit"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &page1); err != nil {
+		t.Fatal(err)
+	}
+	// q=a matches alice, carol, dave (name contains 'a')
+	if page1.Total != 3 || page1.Limit != 2 || page1.Offset != 0 || !page1.HasMore {
+		t.Fatalf("page1 envelope %+v", page1)
+	}
+	if len(page1.Credentials) != 2 || page1.Credentials[0].Name != "alice" || page1.Credentials[1].Name != "carol" {
+		t.Fatalf("page1 order=%v", page1.Credentials)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/credentials?health=problem&sort=priority_desc&limit=10", nil)
+	req.Header.Set("Authorization", "Bearer sk-admin-test")
+	rr = httptest.NewRecorder()
+	h.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("problem status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var problem struct {
+		Credentials []struct {
+			ID string `json:"id"`
+		} `json:"credentials"`
+		Total   int  `json:"total"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem.Total != 2 || problem.HasMore || len(problem.Credentials) != 2 {
+		t.Fatalf("problem filter %+v", problem)
+	}
+	// priority_desc: bob(40), carol(30)
+	if problem.Credentials[0].ID != "cred_bob" || problem.Credentials[1].ID != "cred_carol" {
+		t.Fatalf("problem order=%v", problem.Credentials)
+	}
+
+	// Cap limit at 200
+	req = httptest.NewRequest(http.MethodGet, "/admin/credentials?limit=999", nil)
+	req.Header.Set("Authorization", "Bearer sk-admin-test")
+	rr = httptest.NewRecorder()
+	h.Handler().ServeHTTP(rr, req)
+	var capped struct {
+		Limit int `json:"limit"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &capped); err != nil {
+		t.Fatal(err)
+	}
+	if capped.Limit != 200 || capped.Total != 5 {
+		t.Fatalf("cap limit=%d total=%d", capped.Limit, capped.Total)
 	}
 }
 
