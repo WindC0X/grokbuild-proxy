@@ -95,14 +95,48 @@ try {
 
   // --- Credentials ---
   await page.click('a[data-route="credentials"]');
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(600);
   await shot("03-credentials");
   assert(await page.locator("#page-credentials:not(.hidden)").count(), "credentials page hidden");
 
-  // Empty or table — either ok; empty CTA should exist when empty
+  const expectCreds = process.env.ADMIN_UI_EXPECT_CREDS === "1";
   const emptyVisible = await page.locator("#cred-empty:not(.hidden)").count();
   const tableVisible = await page.locator("#cred-table-wrap:not(.hidden)").count();
   assert(emptyVisible || tableVisible, "credentials has neither empty nor table");
+
+  if (expectCreds) {
+    assert(tableVisible, "expected credential table with seeded accounts");
+    const rows = page.locator("#cred-tbody tr.cred-row");
+    const rowCount = await rows.count();
+    assert(rowCount >= 3, `expected >=3 credential rows, got ${rowCount}`);
+
+    // Drawer detail on row click
+    await rows.first().click();
+    await page.waitForSelector("#drawer:not(.hidden)", { timeout: 5000 });
+    assert(await page.locator("#drawer-body").innerText(), "drawer body empty");
+    await shot("03b-drawer");
+    await page.click("#drawer-close");
+    await page.waitForTimeout(200);
+    assert(await page.locator("#drawer.hidden").count(), "drawer did not close");
+
+    // Batch selection bar
+    await page.locator("#cred-tbody input.cred-check").first().check();
+    await page.waitForTimeout(150);
+    assert(await page.locator("#cred-batch-bar:not(.hidden)").count(), "batch bar not shown");
+    const batchText = await page.locator("#cred-batch-count").innerText();
+    assert(batchText.includes("1"), `batch count unexpected: ${batchText}`);
+    await page.click("#btn-batch-clear");
+    await page.waitForTimeout(150);
+    assert(await page.locator("#cred-batch-bar.hidden").count(), "batch bar still visible after clear");
+
+    // Search narrows list
+    await page.fill("#cred-search", "alice-e2e");
+    await page.waitForTimeout(250);
+    const filtered = await page.locator("#cred-tbody tr.cred-row").count();
+    assert(filtered === 1, `search alice-e2e should leave 1 row, got ${filtered}`);
+    await page.fill("#cred-search", "");
+    await page.waitForTimeout(200);
+  }
 
   // Filter URL sync
   await page.selectOption("#cred-filter-health", "problem");
@@ -123,6 +157,15 @@ try {
   // Reset filter
   await page.selectOption("#cred-filter-health", "all");
   await page.waitForTimeout(200);
+  if (expectCreds) {
+    // After reload+filter reset, table should still list seeded accounts
+    await page.waitForTimeout(300);
+    assert(
+      (await page.locator("#cred-table-wrap:not(.hidden)").count()) > 0 ||
+        (await page.locator("#cred-filtered-empty:not(.hidden)").count()) > 0,
+      "credentials list missing after filter reset"
+    );
+  }
 
   // --- Clients ---
   await page.click('a[data-route="clients"]');

@@ -8,6 +8,39 @@ Releases 为准。
 
 ## [Unreleased] / 未发布
 
+### 简体中文
+
+#### 变更
+
+- Admin 管理后台改为高密度运维台：概览与启动清单、凭证紧凑表 + 详情抽屉、
+  筛选/排序/分页、批量启停与刷新、设置分区 Tab、sessionStorage 会话。
+- 凭证列表不再自动拉取每账号账单（消除 N+1 导致的多账号卡顿）；额度改为详情内按需加载。
+- 视觉对齐 Geist Dark 设计 token（纯黑底、白主按钮、蓝色强调）。
+- 客户端密钥支持启停（`POST /admin/clients/{id}/disable`），接入示例并入客户端页。
+
+#### 测试
+
+- 补充 Admin UI 静态契约、客户端启停/批量 disable 集成用例，以及 Chrome/Playwright 冒烟
+  （`make test-admin-ui-smoke` / `TestAdminUIBrowserSmoke`）。
+
+### English
+
+#### Changed
+
+- Rebuild Admin UI into a dense ops console: overview checklist, compact credential
+  table + detail drawer, filter/sort/pagination, batch enable/disable/refresh,
+  settings tabs, and sessionStorage admin sessions.
+- Stop per-card billing N+1 fan-out on the credential list; load quota on demand
+  in the detail drawer with a small concurrency limit.
+- Restyle Admin UI with Geist Dark tokens.
+- Add client key enable/disable (`POST /admin/clients/{id}/disable`) and fold
+  integration snippets into the clients page.
+
+#### Tests
+
+- Add Admin UI static contracts, client disable / batch disable coverage, and a
+  Chrome/Playwright browser smoke (`make test-admin-ui-smoke`).
+
 ## [0.2.0] - 2026-07-11
 
 ### 简体中文

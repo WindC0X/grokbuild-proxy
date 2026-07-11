@@ -53,6 +53,53 @@ func TestAdminUIBrowserSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Seed credentials so the table/drawer/batch UI paths are exercised.
+	enabled := true
+	disabled := false
+	prioHigh := 20
+	prioLow := 5
+	now := time.Now().UTC()
+	cool := now.Add(30 * time.Minute)
+	for _, item := range []struct {
+		name, email string
+		enabled     *bool
+		priority    *int
+		cooldown    *time.Time
+		lastErr     string
+	}{
+		{name: "alice-e2e", email: "alice@example.com", enabled: &enabled, priority: &prioHigh},
+		{name: "bob-e2e", email: "bob@example.com", enabled: &enabled, priority: &prioLow, cooldown: &cool, lastErr: "http 429"},
+		{name: "carol-e2e", email: "carol@example.com", enabled: &disabled, priority: &prioLow},
+	} {
+		created, err := store.CreateCredential(storage.CreateCredentialInput{
+			Name:         item.name,
+			Email:        item.email,
+			AccessToken:  "e2e-access-token-" + item.name + "-xxxxxxxx",
+			RefreshToken: "e2e-refresh-token-" + item.name + "-xxxxxxxx",
+			ExpiresAt:    now.Add(2 * time.Hour),
+			Enabled:      item.enabled,
+			Priority:     item.priority,
+		})
+		if err != nil {
+			t.Fatalf("seed credential %s: %v", item.name, err)
+		}
+		if item.cooldown != nil || item.lastErr != "" {
+			_, err = store.PatchCredential(created.ID, func(c *storage.Credential) error {
+				if item.cooldown != nil {
+					c.CooldownUntil = item.cooldown
+				}
+				if item.lastErr != "" {
+					c.LastError = item.lastErr
+					c.FailureCount = 1
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("patch credential %s: %v", item.name, err)
+			}
+		}
+	}
+
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1:0"
 	cfg.DataDir = dir
@@ -103,6 +150,7 @@ func TestAdminUIBrowserSmoke(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"ADMIN_UI_BASE_URL="+srv.URL,
 		"ADMIN_UI_ADMIN_KEY="+adminKey,
+		"ADMIN_UI_EXPECT_CREDS=1",
 		"CHROME_PATH="+chrome,
 		"ADMIN_UI_SHOT_DIR="+shotDir,
 		"PLAYWRIGHT_CORE_PATH="+playwrightCorePath(),
