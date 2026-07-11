@@ -62,6 +62,9 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	// Clients
 	mux.HandleFunc("GET /admin/clients", h.ListClients)
 	mux.HandleFunc("POST /admin/clients", h.CreateClient)
+	mux.HandleFunc("POST /admin/clients/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		h.SetClientDisabled(w, r, r.PathValue("id"))
+	})
 	mux.HandleFunc("DELETE /admin/clients/{id}", func(w http.ResponseWriter, r *http.Request) {
 		h.DeleteClient(w, r, r.PathValue("id"))
 	})
@@ -135,6 +138,10 @@ func (h *Handlers) dispatchFallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if id, rest, ok := cutAfterPrefix(path, "/admin/clients/"); ok {
+			if rest == "disable" && r.Method == http.MethodPost {
+				h.SetClientDisabled(w, r, id)
+				return
+			}
 			if rest == "" && r.Method == http.MethodDelete {
 				h.DeleteClient(w, r, id)
 				return

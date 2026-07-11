@@ -156,8 +156,10 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=6`,
-		`app.css?v=6`,
+		`app.js?v=7`,
+		`app.css?v=7`,
+		`id="cred-batch-bar"`,
+		`id="cred-select-all"`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("index.html missing shell marker %q", marker)
@@ -182,6 +184,9 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		`health === "problem"`,
 		"function upsertCredentialLocal(c)",
 		"function removeCredentialLocal(id)",
+		"function runBatch(actionLabel, worker)",
+		"function markSettingsDirty()",
+		`/admin/clients/" + encodeURIComponent(c.id) + "/disable"`,
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)

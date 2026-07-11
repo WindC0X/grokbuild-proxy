@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>grokbuild 管理后台</title>
-  <link rel="stylesheet" href="/admin/ui/app.css?v=6" />
+  <link rel="stylesheet" href="/admin/ui/app.css?v=7" />
 </head>
 <body>
   <div id="app">
@@ -129,6 +129,16 @@
             <div class="toolbar-meta muted" id="cred-count">—</div>
           </div>
 
+          <div id="cred-batch-bar" class="batch-bar card hidden" role="region" aria-label="批量操作">
+            <span class="muted" id="cred-batch-count">已选 0</span>
+            <div class="row gap wrap">
+              <button type="button" class="btn btn-sm" id="btn-batch-enable">批量启用</button>
+              <button type="button" class="btn btn-sm" id="btn-batch-disable">批量禁用</button>
+              <button type="button" class="btn btn-sm" id="btn-batch-refresh">批量刷新令牌</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-batch-clear">清除选择</button>
+            </div>
+          </div>
+
           <div id="cred-panel" class="stack">
             <div id="cred-loading" class="panel-state card hidden">
               <div class="skeleton-lines" aria-hidden="true">
@@ -160,6 +170,9 @@
               <table class="data-table" id="cred-table">
                 <thead>
                   <tr>
+                    <th class="col-check">
+                      <input type="checkbox" id="cred-select-all" aria-label="全选当前页" />
+                    </th>
                     <th>账号</th>
                     <th>配置</th>
                     <th>运行状态</th>
@@ -269,6 +282,6 @@
     </div>
   </div>
 
-  <script src="/admin/ui/app.js?v=6" defer></script>
+  <script src="/admin/ui/app.js?v=7" defer></script>
 </body>
 </html>

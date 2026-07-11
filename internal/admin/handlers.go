@@ -40,6 +40,7 @@ type Store interface {
 	ListClients() ([]storage.ClientKey, error)
 	CreateClient(name string) (storage.CreateClientResult, error)
 	DeleteClient(id string) error
+	SetClientDisabled(id string, disabled bool) (storage.ClientKey, error)
 }
 
 type credentialUpserter interface {
@@ -981,6 +982,28 @@ func (h *Handlers) DeleteClient(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+// SetClientDisabled POST /admin/clients/{id}/disable
+// Body: {"disabled": true|false} (required).
+func (h *Handlers) SetClientDisabled(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if err := decodeJSON(r, h.maxBody(), &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Disabled == nil {
+		writeErr(w, http.StatusBadRequest, "disabled is required")
+		return
+	}
+	updated, err := h.Store.SetClientDisabled(id, *body.Disabled)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // System GET /admin/system

@@ -16,6 +16,7 @@
     clients: [],
     credFilter: { q: "", health: "all", sort: "priority_desc", page: 1 },
     selectedCredId: "",
+    selectedIds: {},
     crisisDismissed: false,
     busy: false,
     listAbort: null,
@@ -24,6 +25,8 @@
     billingQueue: [],
     billingActive: 0,
     focusReturn: null,
+    settingsDirty: false,
+    settingsSaveHint: null,
   };
 
   // ---------- DOM helpers (no innerHTML for untrusted data) ----------
@@ -257,6 +260,13 @@
 
   function navigate(route) {
     if (!route) route = "overview";
+    if (state.route === "settings" && route !== "settings" && state.settingsDirty) {
+      if (!confirm("运行配置有未保存的修改，确定离开？")) {
+        setActiveNav("settings");
+        return;
+      }
+      state.settingsDirty = false;
+    }
     location.hash = "#/" + route;
   }
 
@@ -276,6 +286,20 @@
 
   function render() {
     var route = requireAuth(parseRoute());
+    // Guard leaving settings with unsaved edits (hash navigation).
+    if (
+      state.route === "settings" &&
+      route !== "settings" &&
+      state.settingsDirty &&
+      state.key
+    ) {
+      if (!confirm("运行配置有未保存的修改，确定离开？")) {
+        location.hash = "#/settings";
+        setActiveNav("settings");
+        return;
+      }
+      state.settingsDirty = false;
+    }
     state.route = route;
 
     show($("view-login"), route === "login");
@@ -729,6 +753,7 @@
     });
     renderPager(pages);
     highlightSelectedRow();
+    updateBatchBar();
   }
 
   function renderPager(pages) {
@@ -755,10 +780,95 @@
     host.appendChild(next);
   }
 
+  function selectedCount() {
+    var n = 0;
+    for (var k in state.selectedIds) {
+      if (state.selectedIds[k]) n++;
+    }
+    return n;
+  }
+
+  function selectedIdList() {
+    var out = [];
+    for (var k in state.selectedIds) {
+      if (state.selectedIds[k]) out.push(k);
+    }
+    return out;
+  }
+
+  function updateBatchBar() {
+    var bar = $("cred-batch-bar");
+    var n = selectedCount();
+    setText($("cred-batch-count"), "已选 " + n);
+    show(bar, n > 0);
+    var all = $("cred-select-all");
+    if (all) {
+      var rows = document.querySelectorAll("#cred-tbody input.cred-check");
+      var checked = 0;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].checked) checked++;
+      }
+      all.checked = rows.length > 0 && checked === rows.length;
+      all.indeterminate = checked > 0 && checked < rows.length;
+    }
+  }
+
+  function clearSelection() {
+    state.selectedIds = {};
+    updateBatchBar();
+    applyCredFiltersAndRender();
+  }
+
+  function runBatch(actionLabel, worker) {
+    var ids = selectedIdList();
+    if (!ids.length) {
+      toast("请先选择账号", "err");
+      return;
+    }
+    if (!confirm(actionLabel + " " + ids.length + " 个账号？")) return;
+    var ok = 0;
+    var fail = 0;
+    var chain = Promise.resolve();
+    ids.forEach(function (id) {
+      chain = chain.then(function () {
+        return worker(id)
+          .then(function () {
+            ok++;
+          })
+          .catch(function () {
+            fail++;
+          });
+      });
+    });
+    chain.then(function () {
+      toast(actionLabel + "完成：成功 " + ok + " · 失败 " + fail, fail ? "err" : "ok");
+      state.selectedIds = {};
+      loadCredentials();
+    });
+  }
+
   function renderCredentialRow(c) {
     var tr = el("tr", "cred-row");
     tr.dataset.id = c.id || "";
     if (c.id === state.selectedCredId) tr.classList.add("is-selected");
+
+    var checkTd = el("td", "col-check");
+    var cb = el("input");
+    cb.type = "checkbox";
+    cb.className = "cred-check";
+    cb.checked = !!state.selectedIds[c.id];
+    cb.setAttribute("aria-label", "选择 " + (c.name || c.id || "账号"));
+    cb.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+    cb.addEventListener("change", function (e) {
+      e.stopPropagation();
+      if (cb.checked) state.selectedIds[c.id] = true;
+      else delete state.selectedIds[c.id];
+      updateBatchBar();
+    });
+    checkTd.appendChild(cb);
+    tr.appendChild(checkTd);
 
     var nameTd = el("td");
     var title = el("div", "cred-name", c.name || c.email || c.id || "（未命名）");
@@ -1565,6 +1675,28 @@
         copyClientConfig(c);
       });
       act.appendChild(copyCfg);
+      var toggle = el("button", "btn btn-sm", c.disabled ? "启用" : "停用");
+      toggle.type = "button";
+      toggle.addEventListener("click", function () {
+        var nextDisabled = !c.disabled;
+        var label = nextDisabled ? "停用" : "启用";
+        if (nextDisabled && !confirm("确认" + label + "客户端密钥 " + (c.name || c.id) + " ？停用后下游将无法鉴权。")) {
+          return;
+        }
+        toggle.disabled = true;
+        api("POST", "/admin/clients/" + encodeURIComponent(c.id) + "/disable", { disabled: nextDisabled })
+          .then(function () {
+            toast("已" + label, "ok");
+            loadClients();
+          })
+          .catch(function (err) {
+            toast(label + "失败: " + err.message, "err");
+          })
+          .finally(function () {
+            toggle.disabled = false;
+          });
+      });
+      act.appendChild(toggle);
       var del = el("button", "btn btn-sm btn-danger", "删除");
       del.type = "button";
       del.addEventListener("click", function () {
@@ -1681,14 +1813,34 @@
 
   // ---------- Runtime settings ----------
 
+  function markSettingsDirty() {
+    state.settingsDirty = true;
+    if (state.settingsSaveHint) {
+      setText(state.settingsSaveHint, "有未保存的修改");
+      state.settingsSaveHint.className = "warn-note";
+    }
+  }
+
+  function clearSettingsDirty(savedAt) {
+    state.settingsDirty = false;
+    if (state.settingsSaveHint) {
+      setText(state.settingsSaveHint, savedAt ? "已保存于 " + savedAt : "");
+      state.settingsSaveHint.className = "muted small";
+    }
+  }
+
   function loadSettings() {
     var host = $("settings-body");
     if (!host) return;
+    if (state.settingsDirty && !confirm("有未保存的修改，重新加载将丢弃。继续？")) {
+      return;
+    }
     clear(host);
     host.appendChild(el("p", "muted", "加载运行设置…"));
     api("GET", "/admin/settings")
       .then(function (settings) {
         state.settings = settings;
+        state.settingsDirty = false;
         clear(host);
         host.appendChild(renderSettings(settings || {}));
       })
@@ -1710,6 +1862,8 @@
     var globalProxy = settings.global_proxy || {};
     var converter = settings.sso_converter || {};
     var inspection = settings.inspection || {};
+    state.settingsSaveHint = el("p", "muted small", "");
+    wrap.appendChild(state.settingsSaveHint);
 
     wrap.appendChild(el("h3", "", "全局出站代理"));
     var proxyMode = settingSelect(
@@ -1721,6 +1875,7 @@
       ],
       globalProxy.mode || "environment"
     );
+    proxyMode.input.addEventListener("change", markSettingsDirty);
     wrap.appendChild(proxyMode.field);
     if (globalProxy.url) wrap.appendChild(el("p", "muted", "当前：" + globalProxy.url));
     var proxyURL = settingInput(
@@ -1728,6 +1883,7 @@
       "password",
       "http://user:pass@host:port 或 socks5h://host:port"
     );
+    proxyURL.input.addEventListener("input", markSettingsDirty);
     wrap.appendChild(proxyURL.field);
 
     wrap.appendChild(el("h3", "", "SSO 转换服务"));
@@ -1754,6 +1910,8 @@
       converterBatch,
     ].forEach(function (item) {
       wrap.appendChild(item.field);
+      var ev = item.input.type === "checkbox" || item.input.tagName === "SELECT" ? "change" : "input";
+      item.input.addEventListener(ev, markSettingsDirty);
     });
     wrap.appendChild(
       el("p", "muted", converter.api_key_configured ? "API Key 已配置（不会回显）" : "尚未配置 API Key")
@@ -1780,6 +1938,8 @@
       inspectPurge,
     ].forEach(function (item) {
       wrap.appendChild(item.field);
+      var ev = item.input.type === "checkbox" || item.input.tagName === "SELECT" ? "change" : "input";
+      item.input.addEventListener(ev, markSettingsDirty);
     });
     wrap.appendChild(el("p", "muted", "401 经刷新复核后隔离；429 只进入冷却，不会被判定为失效。自动删除为高风险操作。"));
     var inspectionStatus = el("p", "muted", "巡检状态加载中…");
@@ -1854,7 +2014,19 @@
           proxyURL.input.value = "";
           converterKey.input.value = "";
           toast("运行设置已保存", "ok");
-          loadSettings();
+          state.settingsDirty = false;
+          clearSettingsDirty(new Date().toLocaleTimeString());
+          // Reload without dirty confirm.
+          state.settingsDirty = false;
+          var host = $("settings-body");
+          return api("GET", "/admin/settings").then(function (settings) {
+            state.settings = settings;
+            if (host) {
+              clear(host);
+              host.appendChild(renderSettings(settings || {}));
+              clearSettingsDirty(new Date().toLocaleTimeString());
+            }
+          });
         })
         .catch(function (err) {
           toast("设置保存失败: " + err.message, "err");
@@ -2079,6 +2251,59 @@
 
     var btnRetry = $("btn-cred-retry");
     if (btnRetry) btnRetry.addEventListener("click", loadCredentials);
+
+    var selectAll = $("cred-select-all");
+    if (selectAll) {
+      selectAll.addEventListener("change", function () {
+        var rows = document.querySelectorAll("#cred-tbody input.cred-check");
+        for (var i = 0; i < rows.length; i++) {
+          var id = rows[i].closest("tr") && rows[i].closest("tr").dataset.id;
+          rows[i].checked = selectAll.checked;
+          if (!id) continue;
+          if (selectAll.checked) state.selectedIds[id] = true;
+          else delete state.selectedIds[id];
+        }
+        updateBatchBar();
+      });
+    }
+    var batchEnable = $("btn-batch-enable");
+    if (batchEnable) {
+      batchEnable.addEventListener("click", function () {
+        runBatch("批量启用", function (id) {
+          return api("POST", "/admin/credentials/" + encodeURIComponent(id) + "/disable", {
+            enabled: true,
+          }).then(function (updated) {
+            if (updated && updated.id) upsertCredentialLocal(updated);
+          });
+        });
+      });
+    }
+    var batchDisable = $("btn-batch-disable");
+    if (batchDisable) {
+      batchDisable.addEventListener("click", function () {
+        runBatch("批量禁用", function (id) {
+          return api("POST", "/admin/credentials/" + encodeURIComponent(id) + "/disable", {
+            enabled: false,
+          }).then(function (updated) {
+            if (updated && updated.id) upsertCredentialLocal(updated);
+          });
+        });
+      });
+    }
+    var batchRefresh = $("btn-batch-refresh");
+    if (batchRefresh) {
+      batchRefresh.addEventListener("click", function () {
+        runBatch("批量刷新令牌", function (id) {
+          return api("POST", "/admin/credentials/" + encodeURIComponent(id) + "/refresh").then(
+            function (updated) {
+              if (updated && updated.id) upsertCredentialLocal(updated);
+            }
+          );
+        });
+      });
+    }
+    var batchClear = $("btn-batch-clear");
+    if (batchClear) batchClear.addEventListener("click", clearSelection);
 
     var btnClearFilter = $("btn-cred-clear-filter");
     if (btnClearFilter) {

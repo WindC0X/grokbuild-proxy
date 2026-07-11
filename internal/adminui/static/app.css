@@ -537,6 +537,11 @@ code {
   border-radius: var(--radius-lg);
 }
 
+.empty .row {
+  justify-content: center;
+  margin-top: 12px;
+}
+
 .empty h3,
 .panel-state h3,
 .error-panel h3 {
@@ -642,6 +647,29 @@ table,
 .col-actions {
   white-space: nowrap;
   width: 1%;
+}
+
+.col-check {
+  width: 36px;
+  text-align: center;
+}
+
+.col-check input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .err-cell {

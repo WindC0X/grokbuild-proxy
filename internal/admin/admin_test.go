@@ -118,6 +118,47 @@ func TestMalformedCreateClientBodyDoesNotCreateKey(t *testing.T) {
 	}
 }
 
+func TestSetClientDisabled(t *testing.T) {
+	store := newFakeStore()
+	_, _ = store.CreateClient("ops")
+	h := &Handlers{Store: store, AdminKey: "admin"}
+
+	// Missing disabled field → 400
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{}`))
+	h.SetClientDisabled(rec, req, "cli_1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Disable
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":true}`))
+	h.SetClientDisabled(rec, req, "cli_1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	list, _ := store.ListClients()
+	if len(list) != 1 || !list[0].Disabled {
+		t.Fatalf("expected disabled client, got %+v", list)
+	}
+
+	// Re-enable via router path
+	mux := http.NewServeMux()
+	h.Register(mux)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":false}`))
+	req.Header.Set("Authorization", "Bearer admin")
+	h.RequireAdmin(mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	list, _ = store.ListClients()
+	if len(list) != 1 || list[0].Disabled {
+		t.Fatalf("expected enabled client, got %+v", list)
+	}
+}
+
 func TestMaskedCredentialIncludesEffectiveRedactedProxy(t *testing.T) {
 	h := &Handlers{ProxyResolver: fixedProxyResolver{resolved: outbound.ResolvedProxy{Mode: outbound.ModeURL, Source: "runtime", URL: "http://user:secret@proxy.test:8080"}}}
 	view := h.maskedCredential(storage.Credential{ProxyMode: outbound.ModeInherit})
@@ -277,6 +318,18 @@ func (f *fakeStore) DeleteClient(id string) error {
 	}
 	delete(f.cli, id)
 	return nil
+}
+
+func (f *fakeStore) SetClientDisabled(id string, disabled bool) (storage.ClientKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ck, ok := f.cli[id]
+	if !ok {
+		return storage.ClientKey{}, errNF("client", id)
+	}
+	ck.Disabled = disabled
+	f.cli[id] = ck
+	return ck, nil
 }
 
 type nfErr struct{ kind, id string }
