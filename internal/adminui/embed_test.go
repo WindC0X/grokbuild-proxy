@@ -10,7 +10,7 @@ import (
 )
 
 func TestEmbeddedStaticFilesPresent(t *testing.T) {
-	for _, name := range []string{"index.html", "app.js", "app.css"} {
+	for _, name := range []string{"index.html", "app.js", "app.css", "theme-init.js"} {
 		b, err := ReadStatic(name)
 		if err != nil {
 			t.Fatalf("missing embed static/%s: %v", name, err)
@@ -219,8 +219,15 @@ func TestAdminSessionUsesSessionStorage(t *testing.T) {
 			t.Fatalf("app.js missing session marker %q", marker)
 		}
 	}
-	if strings.Contains(source, "localStorage") {
+	// Theme/density may use localStorage; admin key must stay on sessionStorage only.
+	if strings.Contains(source, "localStorage.setItem(SESSION_KEY") ||
+		strings.Contains(source, "localStorage.getItem(SESSION_KEY") ||
+		strings.Contains(source, `localStorage.setItem("grokbuild_admin_key"`) ||
+		strings.Contains(source, `localStorage.getItem("grokbuild_admin_key"`) {
 		t.Fatal("admin key must not use long-lived localStorage")
+	}
+	if !strings.Contains(source, `localStorage.setItem("gb_theme"`) {
+		t.Fatal("theme preference should use localStorage (not sessionStorage)")
 	}
 }
 
@@ -264,12 +271,17 @@ func TestPageStateAndOverviewShell(t *testing.T) {
 		`id="drawer"`,
 		`data-route="overview"`,
 		`data-route="clients"`,
-		`app.js?v=9`,
-		`app.css?v=9`,
+		`app.js?v=10`,
+		`app.css?v=10`,
+		`theme-init.js?v=10`,
 		`id="cred-batch-bar"`,
 		`id="cred-select-all"`,
 		`id="overview-activity"`,
 		`id="btn-page-quota"`,
+		`id="theme-seg"`,
+		`id="density-seg"`,
+		`id="sidebar"`,
+		`class="shell-layout"`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("index.html missing shell marker %q", marker)
@@ -310,6 +322,11 @@ func TestCredentialListSupportsFilterPagination(t *testing.T) {
 		"function loadVisiblePageQuota()",
 		"ACTIVITY_MAX = 20",
 		"activityLog",
+		"function applyTheme(pref)",
+		"function applyDensity(pref)",
+		"gb_theme",
+		"gb_density",
+		"function setSidebarOpen(open)",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.js missing list ops marker %q", marker)
@@ -444,13 +461,17 @@ func TestCSSContainsOpsConsolePrimitives(t *testing.T) {
 		".status-dot-danger",
 		"prefers-reduced-motion",
 		":focus-visible",
-		/* Geist Dark tokens from design.dark.md */
+		/* Geist dual-theme tokens */
 		"--bg: #000000",
 		"--text: #ededed",
 		"--accent: #006efe",
 		"--primary: #ededed",
 		"--primary-fg: #000000",
-		"Geist Dark",
+		`[data-theme="light"]`,
+		`[data-theme="dark"]`,
+		".shell-layout",
+		".sidebar",
+		"--bg: #fafafa",
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("app.css missing primitive %q", marker)

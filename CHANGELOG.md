@@ -21,6 +21,8 @@ Releases 为准。
 - 凭证表支持显式「加载本页额度」（仅当前页、有并发上限），列表仍不自动 N+1 拉账单。
 - `GET /admin/credentials` 支持服务端筛选/排序/分页（`q`/`health`/`sort`/`page`/`limit`，
   默认 limit 50、上限 200），响应含 `total`/`offset`/`limit`/`has_more`；Admin 表仅渲染当前页。
+- Admin UI 产品级壳层：左侧导航、Geist 浅色/深色/跟随系统、表格密度切换、SVG 图标
+  （仍为零构建 go:embed）。
 
 #### 测试
 
@@ -47,6 +49,8 @@ Releases 为准。
 - `GET /admin/credentials` supports server-side filter/sort/paging (`q`/`health`/
   `sort`/`page`/`limit`; default limit 50, max 200) with `total`/`offset`/`limit`/
   `has_more`; Admin table renders the current page only.
+- Product Admin shell: left sidebar, Geist light/dark/system themes, density mode,
+  SVG icons (still zero-build go:embed).
 
 #### Tests
 

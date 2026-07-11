@@ -3,16 +3,37 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
+  <meta name="color-scheme" content="dark light" />
   <title>grokbuild 管理后台</title>
-  <link rel="stylesheet" href="/admin/ui/app.css?v=9" />
+  <link rel="stylesheet" href="/admin/ui/app.css?v=10" />
+  <script src="/admin/ui/theme-init.js?v=10"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+  <svg xmlns="http://www.w3.org/2000/svg" class="svg-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-logo" viewBox="0 0 24 24"><path fill="currentColor" d="M6 4h5.2c3.5 0 5.8 2.2 5.8 5.4 0 2.4-1.3 4.2-3.4 4.9L17.8 20h-2.6l-3.9-5.4H8.2V20H6V4zm2.2 2.1v6.4h3c2.1 0 3.4-1.1 3.4-3.2S13.3 6.1 11.2 6.1H8.2z"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path fill="currentColor" d="M14.5 4a5.5 5.5 0 0 1 4.3 9H21v2h-2v2h-2v2h-3.2l-1.4-1.4A5.5 5.5 0 1 1 14.5 4zm0 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm-1 2.5h2v2h-2v-2z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path fill="currentColor" d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path fill="currentColor" d="M9 11a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7zm6.5 1a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM3.5 19.5c0-2.8 2.4-5 5.5-5s5.5 2.2 5.5 5V20H3.5v-.5zm11 .5v-.5c0-1.5.5-2.9 1.4-4 1 .4 2.1.6 3.2.6 1.3 0 2.5-.3 3.5-.8.6 1 1 2.2 1 3.5V20h-9.1z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path fill="currentColor" d="M10.3 3h3.4l.4 2.2a7.1 7.1 0 0 1 1.7.9l2.1-.9 1.7 2.9-1.7 1.5c.1.5.2 1 .2 1.4s-.1.9-.2 1.4l1.7 1.5-1.7 2.9-2.1-.9a7.1 7.1 0 0 1-1.7.9L13.7 21h-3.4l-.4-2.2a7.1 7.1 0 0 1-1.7-.9l-2.1.9-1.7-2.9 1.7-1.5A7.6 7.6 0 0 1 6 12c0-.5.1-1 .2-1.4L4.5 9.1 6.2 6.2l2.1.9a7.1 7.1 0 0 1 1.7-.9L10.3 3zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><path fill="currentColor" d="M9 3h2v2h2V3h2v2h3v3h2v2h-2v2h2v2h-2v3h-3v2h-2v-2h-2v2H9v-2H6v-3H4v-2h2v-2H4V8h2V5h3V3zm0 5v8h6V8H9z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><path fill="currentColor" d="M11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.5 4.9 5.6 7 4.2 8.4 2.1 6.3l1.4-1.4zm14.9 14.9 2.1 2.1-1.4 1.4-2.1-2.1 1.4-1.4zM1 11h3v2H1v-2zm19 0h3v2h-3v-2zM3.5 19.1l1.4 1.4L7 18.4 5.6 17 3.5 19.1zM16.4 5.6l2.1-2.1 1.4 1.4L17.8 7 16.4 5.6zM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10z"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path fill="currentColor" d="M12.5 2a8.5 8.5 0 0 0 0 17c2.6 0 4.9-1.1 6.5-2.9A9 9 0 0 1 9 5.1 8.4 8.4 0 0 1 12.5 2z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><path fill="currentColor" d="M3 4h18v12H3V4zm2 2v8h14V6H5zm4 13h6v1H9v-1zm-1 2h8v1H8v-1z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path fill="currentColor" d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4 4-1.4 1.4-4-4A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5h18v14H3V5zm2 2v7h3.2l1.3 2h5l1.3-2H19V7H5z"/></symbol>
+  </svg>
+
   <div id="app">
     <div id="view-login" class="view hidden">
       <div class="login-wrap">
         <div class="card login-card">
-          <div class="login-icon" aria-hidden="true">&#128273;</div>
+          <div class="login-icon" aria-hidden="true">
+            <svg class="icon icon-lg"><use href="#i-key"></use></svg>
+          </div>
           <h1 class="login-title">grokbuild 管理后台</h1>
           <p class="muted login-desc">输入管理员密钥登录。默认保存在当前标签页（关闭标签后失效）；刷新页面无需重新输入。</p>
           <form id="login-form" class="stack">
@@ -29,235 +50,295 @@
     </div>
 
     <div id="view-shell" class="view hidden">
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark">GB</span>
-          <div>
-            <div class="brand-name">grokbuild</div>
-            <div class="brand-sub muted" id="shell-version">管理后台</div>
+      <div class="shell-layout">
+        <aside class="sidebar" id="sidebar" aria-label="侧边导航">
+          <div class="sidebar-brand">
+            <span class="brand-mark" aria-hidden="true">
+              <svg class="icon"><use href="#i-logo"></use></svg>
+            </span>
+            <div>
+              <div class="brand-name">grokbuild</div>
+              <div class="brand-sub muted" id="shell-version">管理后台</div>
+            </div>
           </div>
-        </div>
-        <div class="topbar-status" id="topbar-status" aria-live="polite">
-          <span class="status-dot status-dot-idle" id="status-dot" aria-hidden="true"></span>
-          <span class="status-text muted" id="status-text">—</span>
-        </div>
-        <nav class="nav" id="main-nav" aria-label="主导航">
-          <a href="#/overview" data-route="overview">概览</a>
-          <a href="#/credentials" data-route="credentials">凭证池</a>
-          <a href="#/clients" data-route="clients">客户端接入</a>
-          <a href="#/settings" data-route="settings">运行配置</a>
-          <a href="#/system" data-route="system">系统</a>
-        </nav>
-        <button type="button" class="btn btn-ghost" id="btn-logout">退出</button>
-      </header>
 
-      <div id="crisis-banner" class="crisis-banner hidden" role="alert">
-        <div class="crisis-body">
-          <strong id="crisis-title">账号池异常</strong>
-          <span class="muted" id="crisis-detail"></span>
-        </div>
-        <div class="row gap">
-          <button type="button" class="btn btn-sm btn-primary" id="btn-crisis-view">查看受影响账号</button>
-          <button type="button" class="btn btn-sm btn-ghost" id="btn-crisis-dismiss" aria-label="关闭横幅">关闭</button>
+          <nav class="nav sidebar-nav" id="main-nav" aria-label="主导航">
+            <a href="#/overview" data-route="overview">
+              <svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg>
+              <span>概览</span>
+            </a>
+            <a href="#/credentials" data-route="credentials">
+              <svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg>
+              <span>凭证池</span>
+            </a>
+            <a href="#/clients" data-route="clients">
+              <svg class="icon" aria-hidden="true"><use href="#i-users"></use></svg>
+              <span>客户端接入</span>
+            </a>
+            <a href="#/settings" data-route="settings">
+              <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
+              <span>运行配置</span>
+            </a>
+            <a href="#/system" data-route="system">
+              <svg class="icon" aria-hidden="true"><use href="#i-cpu"></use></svg>
+              <span>系统</span>
+            </a>
+          </nav>
+
+          <div class="sidebar-footer">
+            <div class="pref-block">
+              <div class="pref-label">主题</div>
+              <div class="seg" id="theme-seg" role="group" aria-label="主题">
+                <button type="button" class="seg-btn" data-theme-pref="light" title="浅色">
+                  <svg class="icon"><use href="#i-sun"></use></svg>
+                </button>
+                <button type="button" class="seg-btn" data-theme-pref="dark" title="深色">
+                  <svg class="icon"><use href="#i-moon"></use></svg>
+                </button>
+                <button type="button" class="seg-btn" data-theme-pref="system" title="跟随系统">
+                  <svg class="icon"><use href="#i-monitor"></use></svg>
+                </button>
+              </div>
+            </div>
+            <div class="pref-block">
+              <div class="pref-label">密度</div>
+              <div class="seg" id="density-seg" role="group" aria-label="密度">
+                <button type="button" class="seg-btn" data-density-pref="comfortable">标准</button>
+                <button type="button" class="seg-btn" data-density-pref="compact">紧凑</button>
+              </div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-block" id="btn-logout">退出</button>
+          </div>
+        </aside>
+
+        <div class="shell-main">
+          <header class="topbar">
+            <button type="button" class="btn btn-ghost btn-icon sidebar-toggle" id="btn-sidebar-toggle" aria-label="打开导航" aria-controls="sidebar" aria-expanded="false">
+              <svg class="icon"><use href="#i-menu"></use></svg>
+            </button>
+            <div class="topbar-status" id="topbar-status" aria-live="polite">
+              <span class="status-dot status-dot-idle" id="status-dot" aria-hidden="true"></span>
+              <span class="status-text muted" id="status-text">—</span>
+            </div>
+            <div class="topbar-spacer"></div>
+          </header>
+
+          <div id="crisis-banner" class="crisis-banner hidden" role="alert">
+            <div class="crisis-body">
+              <strong id="crisis-title">账号池异常</strong>
+              <span class="muted" id="crisis-detail"></span>
+            </div>
+            <div class="row gap">
+              <button type="button" class="btn btn-sm btn-primary" id="btn-crisis-view">查看受影响账号</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-crisis-dismiss" aria-label="关闭横幅">关闭</button>
+            </div>
+          </div>
+
+          <main class="main" id="main-content">
+            <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+            <section id="page-overview" class="page hidden">
+              <div class="page-head">
+                <div>
+                  <h2>概览</h2>
+                  <p class="muted">账号池健康、启动清单与快捷操作</p>
+                </div>
+                <div class="row gap">
+                  <button type="button" class="btn" id="btn-overview-refresh">刷新</button>
+                  <button type="button" class="btn" id="btn-overview-inspect">立即巡检</button>
+                  <button type="button" class="btn btn-primary" id="btn-overview-add">添加账号</button>
+                </div>
+              </div>
+              <div id="overview-checklist" class="card stack hidden"></div>
+              <div id="overview-stats" class="stat-grid"></div>
+              <div id="overview-body" class="stack"></div>
+              <div id="overview-activity" class="card stack" aria-live="polite"></div>
+            </section>
+
+            <section id="page-credentials" class="page hidden">
+              <div class="page-head">
+                <div>
+                  <h2>凭证池</h2>
+                  <p class="muted">Grok 授权账号 · 健康状态 / 优先级 / 令牌 / 代理</p>
+                </div>
+                <div class="row gap wrap">
+                  <button type="button" class="btn" id="btn-cred-refresh-list">刷新列表</button>
+                  <button type="button" class="btn" id="btn-page-quota" title="仅加载当前页账号额度，有并发上限，不会对全池 N+1">加载本页额度</button>
+                  <div class="btn-group">
+                    <button type="button" class="btn btn-primary" id="btn-device-login">浏览器登录</button>
+                    <button type="button" class="btn" id="btn-import-default">导入 ~/.grok</button>
+                    <button type="button" class="btn" id="btn-import-raw">批量导入</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="toolbar card">
+                <label class="field toolbar-search">
+                  <span class="label">搜索</span>
+                  <input id="cred-search" type="search" placeholder="名称 / 邮箱 / ID" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span class="label">运行状态</span>
+                  <select id="cred-filter-health">
+                    <option value="all">全部</option>
+                    <option value="healthy">健康</option>
+                    <option value="cooling">冷却</option>
+                    <option value="expired">过期</option>
+                    <option value="auth_failed">认证失效</option>
+                    <option value="quarantined">隔离</option>
+                    <option value="disabled">已禁用</option>
+                    <option value="problem">需处理</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="label">排序</span>
+                  <select id="cred-sort">
+                    <option value="priority_desc">优先级 ↓</option>
+                    <option value="priority_asc">优先级 ↑</option>
+                    <option value="expires_asc">过期时间 ↑</option>
+                    <option value="updated_desc">最近更新</option>
+                    <option value="name_asc">名称</option>
+                  </select>
+                </label>
+                <div class="toolbar-meta muted" id="cred-count">—</div>
+              </div>
+
+              <div id="cred-batch-bar" class="batch-bar card hidden" role="region" aria-label="批量操作">
+                <span class="muted" id="cred-batch-count">已选 0</span>
+                <div class="row gap wrap">
+                  <button type="button" class="btn btn-sm" id="btn-batch-enable">批量启用</button>
+                  <button type="button" class="btn btn-sm" id="btn-batch-disable">批量禁用</button>
+                  <button type="button" class="btn btn-sm" id="btn-batch-refresh">批量刷新令牌</button>
+                  <button type="button" class="btn btn-sm btn-ghost" id="btn-batch-clear">清除选择</button>
+                </div>
+              </div>
+
+              <div id="cred-panel" class="stack">
+                <div id="cred-loading" class="panel-state card hidden">
+                  <div class="skeleton-lines" aria-hidden="true">
+                    <div class="skeleton"></div>
+                    <div class="skeleton"></div>
+                    <div class="skeleton"></div>
+                  </div>
+                  <p class="muted">加载凭证列表…</p>
+                </div>
+                <div id="cred-error" class="panel-state card error-panel hidden" role="alert">
+                  <h3>加载失败</h3>
+                  <p class="muted" id="cred-error-msg"></p>
+                  <button type="button" class="btn btn-primary" id="btn-cred-retry">重试</button>
+                </div>
+                <div id="cred-empty" class="empty card hidden">
+                  <div class="empty-icon" aria-hidden="true">
+                    <svg class="icon icon-lg"><use href="#i-inbox"></use></svg>
+                  </div>
+                  <h3>暂无凭证</h3>
+                  <p class="muted">推荐使用浏览器登录添加本人 Grok 账号；也可导入本机 <code>~/.grok</code> 或批量文件。</p>
+                  <div class="row gap wrap">
+                    <button type="button" class="btn btn-primary" id="btn-empty-device">浏览器登录</button>
+                    <button type="button" class="btn" id="btn-empty-import">导入本机 ~/.grok</button>
+                  </div>
+                </div>
+                <div id="cred-filtered-empty" class="empty card hidden">
+                  <div class="empty-icon" aria-hidden="true">
+                    <svg class="icon icon-lg"><use href="#i-search"></use></svg>
+                  </div>
+                  <h3>无匹配结果</h3>
+                  <p class="muted">调整搜索或筛选条件后再试。</p>
+                  <button type="button" class="btn" id="btn-cred-clear-filter">清除筛选</button>
+                </div>
+                <div id="cred-table-wrap" class="table-wrap card hidden">
+                  <table class="data-table" id="cred-table">
+                    <thead>
+                      <tr>
+                        <th class="col-check">
+                          <input type="checkbox" id="cred-select-all" aria-label="全选当前页" />
+                        </th>
+                        <th>账号</th>
+                        <th>配置</th>
+                        <th>运行状态</th>
+                        <th>优先级</th>
+                        <th>过期</th>
+                        <th>额度</th>
+                        <th>最近错误</th>
+                        <th class="col-actions">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="cred-tbody"></tbody>
+                  </table>
+                  <div class="pager row gap end" id="cred-pager"></div>
+                </div>
+              </div>
+            </section>
+
+            <section id="page-clients" class="page hidden">
+              <div class="page-head">
+                <div>
+                  <h2>客户端接入</h2>
+                  <p class="muted">下游 API 密钥与 Claude Code / OpenAI 配置</p>
+                </div>
+                <div class="row gap">
+                  <button type="button" class="btn" id="btn-client-refresh">刷新</button>
+                  <button type="button" class="btn btn-primary" id="btn-client-create">创建密钥</button>
+                </div>
+              </div>
+              <div id="client-loading" class="panel-state card hidden">
+                <p class="muted">加载客户端密钥…</p>
+              </div>
+              <div id="client-error" class="panel-state card error-panel hidden" role="alert">
+                <h3>加载失败</h3>
+                <p class="muted" id="client-error-msg"></p>
+                <button type="button" class="btn btn-primary" id="btn-client-retry">重试</button>
+              </div>
+              <div id="client-empty" class="empty card hidden">
+                <h3>暂无客户端密钥</h3>
+                <p class="muted">创建后会得到一次性明文密钥，用于 OpenAI 兼容客户端或 Claude Code。</p>
+                <button type="button" class="btn btn-primary" id="btn-empty-client-create">创建密钥</button>
+              </div>
+              <div id="client-list" class="table-wrap card hidden"></div>
+              <div class="card stack integration-card" id="integration-card">
+                <div class="page-head compact">
+                  <div>
+                    <h3>接入示例</h3>
+                    <p class="muted">按当前访问地址生成环境变量 · 将 <code>&lt;客户端密钥&gt;</code> 换成真实 key</p>
+                  </div>
+                  <button type="button" class="btn btn-primary" id="btn-copy-integration">复制全部</button>
+                </div>
+                <label class="field">
+                  <span class="label">Claude Code（Anthropic 协议）</span>
+                  <pre id="snippet-anthropic" class="code"></pre>
+                </label>
+                <label class="field">
+                  <span class="label">OpenAI 兼容接口</span>
+                  <pre id="snippet-openai" class="code"></pre>
+                </label>
+              </div>
+            </section>
+
+            <section id="page-system" class="page hidden">
+              <div class="page-head">
+                <div>
+                  <h2>系统</h2>
+                  <p class="muted">进程配置与上游摘要</p>
+                </div>
+                <button type="button" class="btn" id="btn-system-refresh">刷新</button>
+              </div>
+              <div id="system-body" class="card stack"></div>
+            </section>
+
+            <section id="page-settings" class="page hidden">
+              <div class="page-head">
+                <div>
+                  <h2>运行配置</h2>
+                  <p class="muted">全局出站代理、SSO 转换服务与凭证自动巡检</p>
+                </div>
+                <button type="button" class="btn" id="btn-settings-refresh">刷新</button>
+              </div>
+              <div id="settings-body" class="card stack"></div>
+            </section>
+          </main>
         </div>
       </div>
-
-      <main class="main">
-        <div id="toast-host" class="toast-host" aria-live="polite"></div>
-
-        <section id="page-overview" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>概览</h2>
-              <p class="muted">账号池健康、启动清单与快捷操作</p>
-            </div>
-            <div class="row gap">
-              <button type="button" class="btn" id="btn-overview-refresh">刷新</button>
-              <button type="button" class="btn" id="btn-overview-inspect">立即巡检</button>
-              <button type="button" class="btn btn-primary" id="btn-overview-add">添加账号</button>
-            </div>
-          </div>
-          <div id="overview-checklist" class="card stack hidden"></div>
-          <div id="overview-stats" class="stat-grid"></div>
-          <div id="overview-body" class="stack"></div>
-          <div id="overview-activity" class="card stack" aria-live="polite"></div>
-        </section>
-
-        <section id="page-credentials" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>凭证池</h2>
-              <p class="muted">Grok 授权账号 · 健康状态 / 优先级 / 令牌 / 代理</p>
-            </div>
-            <div class="row gap wrap">
-              <button type="button" class="btn" id="btn-cred-refresh-list">刷新列表</button>
-              <button type="button" class="btn" id="btn-page-quota" title="仅加载当前页账号额度，有并发上限，不会对全池 N+1">加载本页额度</button>
-              <div class="btn-group">
-                <button type="button" class="btn btn-primary" id="btn-device-login">浏览器登录</button>
-                <button type="button" class="btn" id="btn-import-default">导入 ~/.grok</button>
-                <button type="button" class="btn" id="btn-import-raw">批量导入</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="toolbar card">
-            <label class="field toolbar-search">
-              <span class="label">搜索</span>
-              <input id="cred-search" type="search" placeholder="名称 / 邮箱 / ID" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span class="label">运行状态</span>
-              <select id="cred-filter-health">
-                <option value="all">全部</option>
-                <option value="healthy">健康</option>
-                <option value="cooling">冷却</option>
-                <option value="expired">过期</option>
-                <option value="auth_failed">认证失效</option>
-                <option value="quarantined">隔离</option>
-                <option value="disabled">已禁用</option>
-                <option value="problem">需处理</option>
-              </select>
-            </label>
-            <label class="field">
-              <span class="label">排序</span>
-              <select id="cred-sort">
-                <option value="priority_desc">优先级 ↓</option>
-                <option value="priority_asc">优先级 ↑</option>
-                <option value="expires_asc">过期时间 ↑</option>
-                <option value="updated_desc">最近更新</option>
-                <option value="name_asc">名称</option>
-              </select>
-            </label>
-            <div class="toolbar-meta muted" id="cred-count">—</div>
-          </div>
-
-          <div id="cred-batch-bar" class="batch-bar card hidden" role="region" aria-label="批量操作">
-            <span class="muted" id="cred-batch-count">已选 0</span>
-            <div class="row gap wrap">
-              <button type="button" class="btn btn-sm" id="btn-batch-enable">批量启用</button>
-              <button type="button" class="btn btn-sm" id="btn-batch-disable">批量禁用</button>
-              <button type="button" class="btn btn-sm" id="btn-batch-refresh">批量刷新令牌</button>
-              <button type="button" class="btn btn-sm btn-ghost" id="btn-batch-clear">清除选择</button>
-            </div>
-          </div>
-
-          <div id="cred-panel" class="stack">
-            <div id="cred-loading" class="panel-state card hidden">
-              <div class="skeleton-lines" aria-hidden="true">
-                <div class="skeleton"></div>
-                <div class="skeleton"></div>
-                <div class="skeleton"></div>
-              </div>
-              <p class="muted">加载凭证列表…</p>
-            </div>
-            <div id="cred-error" class="panel-state card error-panel hidden" role="alert">
-              <h3>加载失败</h3>
-              <p class="muted" id="cred-error-msg"></p>
-              <button type="button" class="btn btn-primary" id="btn-cred-retry">重试</button>
-            </div>
-            <div id="cred-empty" class="empty card hidden">
-              <h3>暂无凭证</h3>
-              <p class="muted">推荐使用浏览器登录添加本人 Grok 账号；也可导入本机 <code>~/.grok</code> 或批量文件。</p>
-              <div class="row gap wrap">
-                <button type="button" class="btn btn-primary" id="btn-empty-device">浏览器登录</button>
-                <button type="button" class="btn" id="btn-empty-import">导入本机 ~/.grok</button>
-              </div>
-            </div>
-            <div id="cred-filtered-empty" class="empty card hidden">
-              <h3>无匹配结果</h3>
-              <p class="muted">调整搜索或筛选条件后再试。</p>
-              <button type="button" class="btn" id="btn-cred-clear-filter">清除筛选</button>
-            </div>
-            <div id="cred-table-wrap" class="table-wrap card hidden">
-              <table class="data-table" id="cred-table">
-                <thead>
-                  <tr>
-                    <th class="col-check">
-                      <input type="checkbox" id="cred-select-all" aria-label="全选当前页" />
-                    </th>
-                    <th>账号</th>
-                    <th>配置</th>
-                    <th>运行状态</th>
-                    <th>优先级</th>
-                    <th>过期</th>
-                    <th>额度</th>
-                    <th>最近错误</th>
-                    <th class="col-actions">操作</th>
-                  </tr>
-                </thead>
-                <tbody id="cred-tbody"></tbody>
-              </table>
-              <div class="pager row gap end" id="cred-pager"></div>
-            </div>
-          </div>
-        </section>
-
-        <section id="page-clients" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>客户端接入</h2>
-              <p class="muted">下游 API 密钥与 Claude Code / OpenAI 配置</p>
-            </div>
-            <div class="row gap">
-              <button type="button" class="btn" id="btn-client-refresh">刷新</button>
-              <button type="button" class="btn btn-primary" id="btn-client-create">创建密钥</button>
-            </div>
-          </div>
-          <div id="client-loading" class="panel-state card hidden">
-            <p class="muted">加载客户端密钥…</p>
-          </div>
-          <div id="client-error" class="panel-state card error-panel hidden" role="alert">
-            <h3>加载失败</h3>
-            <p class="muted" id="client-error-msg"></p>
-            <button type="button" class="btn btn-primary" id="btn-client-retry">重试</button>
-          </div>
-          <div id="client-empty" class="empty card hidden">
-            <h3>暂无客户端密钥</h3>
-            <p class="muted">创建后会得到一次性明文密钥，用于 OpenAI 兼容客户端或 Claude Code。</p>
-            <button type="button" class="btn btn-primary" id="btn-empty-client-create">创建密钥</button>
-          </div>
-          <div id="client-list" class="table-wrap card hidden"></div>
-          <div class="card stack integration-card" id="integration-card">
-            <div class="page-head compact">
-              <div>
-                <h3>接入示例</h3>
-                <p class="muted">按当前访问地址生成环境变量 · 将 <code>&lt;客户端密钥&gt;</code> 换成真实 key</p>
-              </div>
-              <button type="button" class="btn btn-primary" id="btn-copy-integration">复制全部</button>
-            </div>
-            <label class="field">
-              <span class="label">Claude Code（Anthropic 协议）</span>
-              <pre id="snippet-anthropic" class="code"></pre>
-            </label>
-            <label class="field">
-              <span class="label">OpenAI 兼容接口</span>
-              <pre id="snippet-openai" class="code"></pre>
-            </label>
-          </div>
-        </section>
-
-        <section id="page-system" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>系统</h2>
-              <p class="muted">进程配置与上游摘要</p>
-            </div>
-            <button type="button" class="btn" id="btn-system-refresh">刷新</button>
-          </div>
-          <div id="system-body" class="card stack"></div>
-        </section>
-
-        <section id="page-settings" class="page hidden">
-          <div class="page-head">
-            <div>
-              <h2>运行配置</h2>
-              <p class="muted">全局出站代理、SSO 转换服务与凭证自动巡检</p>
-            </div>
-            <button type="button" class="btn" id="btn-settings-refresh">刷新</button>
-          </div>
-          <div id="settings-body" class="card stack"></div>
-        </section>
-      </main>
+      <div class="sidebar-backdrop hidden" id="sidebar-backdrop" hidden></div>
     </div>
   </div>
 
@@ -266,7 +347,9 @@
     <div class="drawer-panel card" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
       <div class="drawer-head">
         <h3 id="drawer-title">凭证详情</h3>
-        <button type="button" class="btn btn-ghost btn-icon" id="drawer-close" aria-label="关闭">&times;</button>
+        <button type="button" class="btn btn-ghost btn-icon" id="drawer-close" aria-label="关闭">
+          <svg class="icon"><use href="#i-x"></use></svg>
+        </button>
       </div>
       <div id="drawer-body" class="drawer-body"></div>
       <div id="drawer-foot" class="drawer-foot row gap end"></div>
@@ -278,13 +361,15 @@
     <div class="modal-panel card">
       <div class="modal-head">
         <h3 id="modal-title">对话框</h3>
-        <button type="button" class="btn btn-ghost btn-icon" id="modal-close" aria-label="关闭">&times;</button>
+        <button type="button" class="btn btn-ghost btn-icon" id="modal-close" aria-label="关闭">
+          <svg class="icon"><use href="#i-x"></use></svg>
+        </button>
       </div>
       <div id="modal-body" class="modal-body"></div>
       <div id="modal-foot" class="modal-foot row gap end"></div>
     </div>
   </div>
 
-  <script src="/admin/ui/app.js?v=9" defer></script>
+  <script src="/admin/ui/app.js?v=10" defer></script>
 </body>
 </html>
