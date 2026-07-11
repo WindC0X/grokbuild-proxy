@@ -6,7 +6,7 @@ BIN_DIR ?= bin
 GOFLAGS ?= -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build run test test-race vet check clean docker-build release-snapshot
+.PHONY: all build run test test-race test-admin-ui-smoke vet check clean docker-build release-snapshot
 
 all: check build
 
@@ -25,6 +25,11 @@ test:
 
 test-race:
 	go test -race ./...
+
+# Browser smoke for Admin UI (Chrome + Node + playwright-core; no live upstream).
+# Forces the e2e path even when tools are missing (hard fail).
+test-admin-ui-smoke:
+	ADMIN_UI_E2E=1 go test ./internal/adminui -run TestAdminUIBrowserSmoke -count=1 -timeout 5m -v
 
 vet:
 	go vet ./...
