@@ -10,12 +10,16 @@ import (
 )
 
 // credentialListQuery is the Admin GET /admin/credentials query surface.
+//
+// Limit == 0 means unbounded (return the full filtered set). Paging defaults
+// (limit 50) apply only when page, offset, or limit is explicitly present so
+// bare GET /admin/credentials stays backward-compatible for scripts.
 type credentialListQuery struct {
 	Q      string
 	Health string
 	Sort   string
 	Offset int
-	Limit  int
+	Limit  int // 0 = unbounded
 	Now    time.Time
 }
 
@@ -35,7 +39,7 @@ func parseCredentialListQuery(values map[string][]string, now time.Time) credent
 		Health: strings.ToLower(get("health")),
 		Sort:   strings.ToLower(get("sort")),
 		Now:    now.UTC(),
-		Limit:  50,
+		Limit:  0,
 		Offset: 0,
 	}
 	if q.Health == "" {
@@ -47,23 +51,32 @@ func parseCredentialListQuery(values map[string][]string, now time.Time) credent
 	if q.Now.IsZero() {
 		q.Now = time.Now().UTC()
 	}
-	if n, err := strconv.Atoi(get("limit")); err == nil {
-		q.Limit = n
-	}
-	if q.Limit < 1 {
-		q.Limit = 1
-	}
-	if q.Limit > 200 {
-		q.Limit = 200
-	}
-	if n, err := strconv.Atoi(get("offset")); err == nil {
-		q.Offset = n
-	}
-	if page, err := strconv.Atoi(get("page")); err == nil && page > 0 {
-		q.Offset = (page - 1) * q.Limit
-	}
-	if q.Offset < 0 {
-		q.Offset = 0
+
+	limitRaw := get("limit")
+	pageRaw := get("page")
+	offsetRaw := get("offset")
+	// Only enable default page size when the client asks for paging.
+	paging := limitRaw != "" || pageRaw != "" || offsetRaw != ""
+	if paging {
+		q.Limit = 50
+		if n, err := strconv.Atoi(limitRaw); err == nil {
+			q.Limit = n
+		}
+		if q.Limit < 1 {
+			q.Limit = 1
+		}
+		if q.Limit > 200 {
+			q.Limit = 200
+		}
+		if n, err := strconv.Atoi(offsetRaw); err == nil {
+			q.Offset = n
+		}
+		if page, err := strconv.Atoi(pageRaw); err == nil && page > 0 {
+			q.Offset = (page - 1) * q.Limit
+		}
+		if q.Offset < 0 {
+			q.Offset = 0
+		}
 	}
 	return q
 }
@@ -127,6 +140,11 @@ func sortCredentials(creds []storage.Credential, sortKey string) {
 				return a.Priority < b.Priority
 			}
 		case "expires_asc":
+			// Zero/unknown expiry sorts last (not before real upcoming expiries).
+			aZ, bZ := a.ExpiresAt.IsZero(), b.ExpiresAt.IsZero()
+			if aZ != bZ {
+				return !aZ
+			}
 			if !a.ExpiresAt.Equal(b.ExpiresAt) {
 				return a.ExpiresAt.Before(b.ExpiresAt)
 			}
@@ -172,6 +190,12 @@ func pageCredentials(creds []storage.Credential, q credentialListQuery) (page []
 	offset = q.Offset
 	if offset > total {
 		offset = total
+	}
+	if q.Limit <= 0 {
+		// Unbounded: return the remainder of the filtered set.
+		page = filtered[offset:]
+		limit = len(page)
+		return page, total, offset, limit
 	}
 	limit = q.Limit
 	end := offset + limit

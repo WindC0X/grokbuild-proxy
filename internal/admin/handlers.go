@@ -262,10 +262,15 @@ func subtleConstantTimeEq(a, b string) bool {
 //
 // Supports optional server-side filter/paging for large pools:
 //
-//	q, health, sort, page|offset, limit (default 50, max 200)
+//	q, health, sort, page|offset, limit (default 50 when paging is requested, max 200)
 //
-// Response always includes total/offset/limit/has_more so the Admin SPA can
-// avoid holding the full credential set in browser memory.
+// Bare GET without page/offset/limit returns the full filtered set (backward
+// compatible with scripts that assumed all credentials). Response always
+// includes total/offset/limit/has_more so the Admin SPA can page when it
+// passes limit/page explicitly.
+//
+// Note: filtering still loads the in-memory credential list from storage
+// (JSON file store); this is request-level paging, not storage-layer paging.
 func (h *Handlers) ListCredentials(w http.ResponseWriter, r *http.Request) {
 	creds, err := h.Store.ListCredentials()
 	if err != nil {
@@ -996,7 +1001,7 @@ func (h *Handlers) CreateClient(w http.ResponseWriter, r *http.Request) {
 // DeleteClient DELETE /admin/clients/{id}
 func (h *Handlers) DeleteClient(w http.ResponseWriter, r *http.Request, id string) {
 	if err := h.Store.DeleteClient(id); err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
@@ -1018,7 +1023,7 @@ func (h *Handlers) SetClientDisabled(w http.ResponseWriter, r *http.Request, id 
 	}
 	updated, err := h.Store.SetClientDisabled(id, *body.Disabled)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -1120,4 +1125,25 @@ func writeErr(w http.ResponseWriter, status int, message string) {
 			"code":    status,
 		},
 	})
+}
+
+// writeStoreErr maps storage "not found" to 404 and all other store failures to 500
+// (lock, read, write) so disk/IO faults are not misdiagnosed as missing IDs.
+func writeStoreErr(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	if isNotFoundErr(err) {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, err.Error())
+}
+
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found")
 }

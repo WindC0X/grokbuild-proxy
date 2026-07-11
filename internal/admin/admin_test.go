@@ -147,6 +147,16 @@ func TestSetClientDisabled(t *testing.T) {
 		t.Fatalf("status=%d want 404 body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Store IO/lock failure → 500 (not 404)
+	store.setClientDisabledErr = fmt.Errorf("storage: clients write failed")
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":true}`))
+	h.SetClientDisabled(rec, req, "cli_1")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store err status=%d want 500 body=%s", rec.Code, rec.Body.String())
+	}
+	store.setClientDisabledErr = nil
+
 	// Disable
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/admin/clients/cli_1/disable", strings.NewReader(`{"disabled":true}`))
@@ -255,10 +265,11 @@ func TestMaskedCredentialIncludesEffectiveRedactedProxy(t *testing.T) {
 }
 
 type fakeStore struct {
-	mu        sync.Mutex
-	creds     map[string]storage.Credential
-	cli       map[string]storage.ClientKey
-	createErr error
+	mu                   sync.Mutex
+	creds                map[string]storage.Credential
+	cli                  map[string]storage.ClientKey
+	createErr            error
+	setClientDisabledErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -406,6 +417,9 @@ func (f *fakeStore) DeleteClient(id string) error {
 func (f *fakeStore) SetClientDisabled(id string, disabled bool) (storage.ClientKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.setClientDisabledErr != nil {
+		return storage.ClientKey{}, f.setClientDisabledErr
+	}
 	ck, ok := f.cli[id]
 	if !ok {
 		return storage.ClientKey{}, errNF("client", id)
@@ -469,7 +483,8 @@ func TestAdminCredentialsMasked(t *testing.T) {
 	if len(parsed.Credentials) != 1 {
 		t.Fatalf("len=%d", len(parsed.Credentials))
 	}
-	if parsed.Total != 1 || parsed.Limit != 50 || parsed.Offset != 0 || parsed.HasMore {
+	// Bare GET is unbounded: limit equals returned count (not default 50).
+	if parsed.Total != 1 || parsed.Limit != 1 || parsed.Offset != 0 || parsed.HasMore {
 		t.Fatalf("paging envelope total=%d limit=%d offset=%d has_more=%v", parsed.Total, parsed.Limit, parsed.Offset, parsed.HasMore)
 	}
 	at, _ := parsed.Credentials[0]["access_token"].(string)
@@ -571,6 +586,24 @@ func TestAdminCredentialsListServerPaging(t *testing.T) {
 	}
 	if capped.Limit != 200 || capped.Total != 5 {
 		t.Fatalf("cap limit=%d total=%d", capped.Limit, capped.Total)
+	}
+
+	// Bare GET returns full set (no silent default page of 50).
+	req = httptest.NewRequest(http.MethodGet, "/admin/credentials", nil)
+	req.Header.Set("Authorization", "Bearer sk-admin-test")
+	rr = httptest.NewRecorder()
+	h.Handler().ServeHTTP(rr, req)
+	var full struct {
+		Credentials []map[string]any `json:"credentials"`
+		Total       int              `json:"total"`
+		Limit       int              `json:"limit"`
+		HasMore     bool             `json:"has_more"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &full); err != nil {
+		t.Fatal(err)
+	}
+	if full.Total != 5 || len(full.Credentials) != 5 || full.HasMore || full.Limit != 5 {
+		t.Fatalf("bare list total=%d n=%d limit=%d has_more=%v", full.Total, len(full.Credentials), full.Limit, full.HasMore)
 	}
 }
 

@@ -23,6 +23,9 @@ Releases 为准。
   默认 limit 50、上限 200），响应含 `total`/`offset`/`limit`/`has_more`；Admin 表仅渲染当前页。
 - Admin UI 产品级壳层：左侧导航、Geist 浅色/深色/跟随系统、表格密度切换、SVG 图标
   （仍为零构建 go:embed）。
+- `GET /admin/credentials`：仅在显式 `page`/`offset`/`limit` 时默认分页；裸请求仍返回
+  全量筛选结果（兼容旧脚本）。`expires_asc` 将零过期时间排到最后。
+- 客户端启停/删除：存储层「未找到」返回 404，读写/锁失败返回 500。
 
 #### 测试
 
@@ -51,6 +54,9 @@ Releases 为准。
   `has_more`; Admin table renders the current page only.
 - Product Admin shell: left sidebar, Geist light/dark/system themes, density mode,
   SVG icons (still zero-build go:embed).
+- `GET /admin/credentials` pages only when `page`/`offset`/`limit` is present;
+  bare GET still returns the full filtered set. `expires_asc` sorts zero expiry last.
+- Client disable/delete: map storage not-found to 404, lock/read/write failures to 500.
 
 #### Tests
 

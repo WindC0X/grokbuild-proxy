@@ -9,7 +9,12 @@ import (
 
 func TestParseCredentialListQueryPaging(t *testing.T) {
 	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
-	q := parseCredentialListQuery(map[string][]string{
+	// Bare query: no default limit (backward compatible full list).
+	q := parseCredentialListQuery(nil, now)
+	if q.Limit != 0 || q.Offset != 0 {
+		t.Fatalf("bare query should be unbounded limit=%d offset=%d", q.Limit, q.Offset)
+	}
+	q = parseCredentialListQuery(map[string][]string{
 		"q":      {"Alice"},
 		"health": {"problem"},
 		"sort":   {"name_asc"},
@@ -26,6 +31,11 @@ func TestParseCredentialListQueryPaging(t *testing.T) {
 	q = parseCredentialListQuery(map[string][]string{"limit": {"999"}}, now)
 	if q.Limit != 200 {
 		t.Fatalf("limit cap=%d", q.Limit)
+	}
+	// page alone enables default limit 50
+	q = parseCredentialListQuery(map[string][]string{"page": {"2"}}, now)
+	if q.Limit != 50 || q.Offset != 50 {
+		t.Fatalf("page-only limit=%d offset=%d", q.Limit, q.Offset)
 	}
 }
 
@@ -63,6 +73,26 @@ func TestPageCredentialsFiltersAndPages(t *testing.T) {
 	// priority_desc: d(20), a(10), b(5), c(1) → offset 1 limit 2 => a, b
 	if page[0].ID != "a" || page[1].ID != "b" {
 		t.Fatalf("unexpected page order %v", idsOf(page))
+	}
+
+	// Unbounded limit returns full filtered set
+	q = credentialListQuery{Health: "all", Sort: "priority_desc", Offset: 0, Limit: 0, Now: now}
+	page, total, offset, limit = pageCredentials(creds, q)
+	if total != 4 || offset != 0 || limit != 4 || len(page) != 4 {
+		t.Fatalf("unbounded total=%d off=%d lim=%d n=%d", total, offset, limit, len(page))
+	}
+}
+
+func TestExpiresAscZeroLast(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	creds := []storage.Credential{
+		{ID: "zero", Name: "zero", ExpiresAt: time.Time{}},
+		{ID: "soon", Name: "soon", ExpiresAt: now.Add(time.Hour)},
+		{ID: "later", Name: "later", ExpiresAt: now.Add(24 * time.Hour)},
+	}
+	sortCredentials(creds, "expires_asc")
+	if idsOf(creds)[0] != "soon" || idsOf(creds)[1] != "later" || idsOf(creds)[2] != "zero" {
+		t.Fatalf("expires_asc order=%v want soon,later,zero", idsOf(creds))
 	}
 }
 
